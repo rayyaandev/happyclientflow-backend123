@@ -1,0 +1,139 @@
+{
+  "routers": {
+    "profile_anwalt": {
+      "name": "profile_anwalt",
+      "version": "2025-10-10T08:44:44",
+      "disableAuth": false
+    },
+    "profile_myhammer": {
+      "name": "profile_myhammer",
+      "version": "2025-10-12T11:28:52",
+      "disableAuth": true
+    },
+    "supabase": {
+      "name": "supabase",
+      "version": "2025-09-20T11:14:54",
+      "disableAuth": false
+    },
+    "brevo": {
+      "name": "brevo",
+      "version": "2025-07-27T10:39:09",
+      "disableAuth": false
+    },
+    "sms": {
+      "name": "sms",
+      "version": "2025-07-24T03:52:10",
+      "disableAuth": false
+    },
+    "stripe": {
+      "name": "stripe",
+      "version": "2025-08-13T04:11:13",
+      "disableAuth": false
+    },
+    "support": {
+      "name": "support",
+      "version": "2025-07-10T11:08:41",
+      "disableAuth": false
+    },
+    "add_client_from_consent": {
+      "name": "add_client_from_consent",
+      "version": "2025-10-21T10:19:26",
+      "disableAuth": true
+    },
+    "public_create_reminders": {
+      "name": "public_create_reminders",
+      "version": "2025-09-29T03:36:52",
+      "disableAuth": false
+    },
+    "secure_user_update": {
+      "name": "secure_user_update",
+      "version": "2025-07-26T06:09:23",
+      "disableAuth": false
+    },
+    "secure": {
+      "name": "secure",
+      "version": "2025-07-07T15:06:43",
+      "disableAuth": false
+    },
+    "admin": {
+      "name": "admin",
+      "version": "2025-07-29T03:01:09",
+      "disableAuth": false
+    },
+    "public_data": {
+      "name": "public_data",
+      "version": "2025-10-11T10:32:10",
+      "disableAuth": false
+    },
+    "invites": {
+      "name": "invites",
+      "version": "2025-07-26T05:50:59",
+      "disableAuth": false
+    },
+    "google_places": {
+      "name": "google_places",
+      "version": "2025-07-12T16:30:08",
+      "disableAuth": false
+    },
+    "create_feedback": {
+      "name": "create_feedback",
+      "version": "2025-09-23T13:08:22",
+      "disableAuth": true
+    },
+    "twilio_callbacks": {
+      "name": "twilio_callbacks",
+      "version": "2025-07-24T03:51:19",
+      "disableAuth": false
+    },
+    "profile_jameda": {
+      "name": "profile_jameda",
+      "version": "2025-10-10T08:42:27",
+      "disableAuth": false
+    },
+    "profile_provenexpert": {
+      "name": "profile_provenexpert",
+      "version": "2025-10-10T08:44:31",
+      "disableAuth": false
+    },
+    "reminders": {
+      "name": "reminders",
+      "version": "2025-10-12T11:17:46",
+      "disableAuth": false
+    },
+    "review_requests": {
+      "name": "review_requests",
+      "version": "2025-07-27T10:56:26",
+      "disableAuth": false
+    },
+    "client_consent": {
+      "name": "client_consent",
+      "version": "2025-07-26T04:09:43",
+      "disableAuth": false
+    },
+    "cancel_reminders": {
+      "name": "cancel_reminders",
+      "version": "2025-09-17T15:16:55",
+      "disableAuth": false
+    },
+    "ai_reviews": {
+      "name": "ai_reviews",
+      "version": "2025-10-02T15:06:53",
+      "disableAuth": false
+    },
+    "csv_utils_api": {
+      "name": "csv_utils_api",
+      "version": "2025-07-07T15:10:48",
+      "disableAuth": false
+    },
+    "profile_booking": {
+      "name": "profile_booking",
+      "version": "2025-10-12T11:29:19",
+      "disableAuth": false
+    },
+    "profile_trustpilot": {
+      "name": "profile_trustpilot",
+      "version": "2025-10-12T11:29:04",
+      "disableAuth": false
+    }
+  }
+}

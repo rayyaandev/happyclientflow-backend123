@@ -1,0 +1,22 @@
+# Workspace version: 1.49.3
+fastapi==0.115.12
+databutton==0.38.34
+uvicorn[standard]==0.34.2
+ipykernel==6.29.5
+python-multipart==0.0.9
+openai
+beautifulsoup4
+requests
+psycopg2-binary
+sqlalchemy
+sendgrid
+pydantic[email]
+supabase
+stripe
+twilio
+lxml
+cloudscraper
+playwright
+apify-client
+firecrawl-py
+zenrows
