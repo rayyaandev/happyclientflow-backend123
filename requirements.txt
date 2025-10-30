@@ -1,5 +1,4 @@
-# Workspace version: 1.49.3
-fastapi==0.115.12
+fastapi
 uvicorn[standard]==0.34.2
 ipykernel==6.29.5
 python-multipart==0.0.9
