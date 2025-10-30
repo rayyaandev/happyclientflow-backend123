@@ -1,7 +1,7 @@
 fastapi
-uvicorn[standard]==0.34.2
-ipykernel==6.29.5
-python-multipart==0.0.9
+uvicorn[standard]
+ipykernel
+python-multipart
 openai
 beautifulsoup4
 requests
