@@ -1,12 +1,10 @@
 fastapi
 uvicorn
-ipykernel
 python-multipart
 openai
 beautifulsoup4
 requests
 psycopg2-binary
-databutton
 sqlalchemy
 sendgrid
 pydantic[email]
@@ -15,7 +13,6 @@ stripe
 twilio
 lxml
 cloudscraper
-playwright
 apify-client
 firecrawl-py
 zenrows
