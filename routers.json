@@ -3,7 +3,7 @@
     "profile_anwalt": {
       "name": "profile_anwalt",
       "version": "2025-10-10T08:44:44",
-      "disableAuth": false
+      "disableAuth": true
     },
     "profile_myhammer": {
       "name": "profile_myhammer",
@@ -13,27 +13,27 @@
     "supabase": {
       "name": "supabase",
       "version": "2025-09-20T11:14:54",
-      "disableAuth": false
+      "disableAuth": true
     },
     "brevo": {
       "name": "brevo",
       "version": "2025-07-27T10:39:09",
-      "disableAuth": false
+      "disableAuth": true
     },
     "sms": {
       "name": "sms",
       "version": "2025-07-24T03:52:10",
-      "disableAuth": false
+      "disableAuth": true
     },
     "stripe": {
       "name": "stripe",
       "version": "2025-08-13T04:11:13",
-      "disableAuth": false
+      "disableAuth": true
     },
     "support": {
       "name": "support",
       "version": "2025-07-10T11:08:41",
-      "disableAuth": false
+      "disableAuth": true
     },
     "add_client_from_consent": {
       "name": "add_client_from_consent",
@@ -43,37 +43,37 @@
     "public_create_reminders": {
       "name": "public_create_reminders",
       "version": "2025-09-29T03:36:52",
-      "disableAuth": false
+      "disableAuth": true
     },
     "secure_user_update": {
       "name": "secure_user_update",
       "version": "2025-07-26T06:09:23",
-      "disableAuth": false
+      "disableAuth": true
     },
     "secure": {
       "name": "secure",
       "version": "2025-07-07T15:06:43",
-      "disableAuth": false
+      "disableAuth": true
     },
     "admin": {
       "name": "admin",
       "version": "2025-07-29T03:01:09",
-      "disableAuth": false
+      "disableAuth": true
     },
     "public_data": {
       "name": "public_data",
       "version": "2025-10-11T10:32:10",
-      "disableAuth": false
+      "disableAuth": true
     },
     "invites": {
       "name": "invites",
       "version": "2025-07-26T05:50:59",
-      "disableAuth": false
+      "disableAuth": true
     },
     "google_places": {
       "name": "google_places",
       "version": "2025-07-12T16:30:08",
-      "disableAuth": false
+      "disableAuth": true
     },
     "create_feedback": {
       "name": "create_feedback",
@@ -83,57 +83,57 @@
     "twilio_callbacks": {
       "name": "twilio_callbacks",
       "version": "2025-07-24T03:51:19",
-      "disableAuth": false
+      "disableAuth": true
     },
     "profile_jameda": {
       "name": "profile_jameda",
       "version": "2025-10-10T08:42:27",
-      "disableAuth": false
+      "disableAuth": true
     },
     "profile_provenexpert": {
       "name": "profile_provenexpert",
       "version": "2025-10-10T08:44:31",
-      "disableAuth": false
+      "disableAuth": true
     },
     "reminders": {
       "name": "reminders",
       "version": "2025-10-12T11:17:46",
-      "disableAuth": false
+      "disableAuth": true
     },
     "review_requests": {
       "name": "review_requests",
       "version": "2025-07-27T10:56:26",
-      "disableAuth": false
+      "disableAuth": true
     },
     "client_consent": {
       "name": "client_consent",
       "version": "2025-07-26T04:09:43",
-      "disableAuth": false
+      "disableAuth": true
     },
     "cancel_reminders": {
       "name": "cancel_reminders",
       "version": "2025-09-17T15:16:55",
-      "disableAuth": false
+      "disableAuth": true
     },
     "ai_reviews": {
       "name": "ai_reviews",
       "version": "2025-10-02T15:06:53",
-      "disableAuth": false
+      "disableAuth": true
     },
     "csv_utils_api": {
       "name": "csv_utils_api",
       "version": "2025-07-07T15:10:48",
-      "disableAuth": false
+      "disableAuth": true
     },
     "profile_booking": {
       "name": "profile_booking",
       "version": "2025-10-12T11:29:19",
-      "disableAuth": false
+      "disableAuth": true
     },
     "profile_trustpilot": {
       "name": "profile_trustpilot",
       "version": "2025-10-12T11:29:04",
-      "disableAuth": false
+      "disableAuth": true
     }
   }
 }
