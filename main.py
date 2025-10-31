@@ -82,7 +82,11 @@ def create_app() -> FastAPI:
     # Add CORS middleware - must be added BEFORE routers
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://localhost:5173", "http://localhost:3000"],  # Development origins
+        allow_origins=[
+            "http://localhost:5173",
+            "http://localhost:3000",
+            "https://happyclientflow-frontend.vercel.app",
+        ],
         allow_credentials=True,
         allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
         allow_headers=["Content-Type", "Authorization", "Accept"],
