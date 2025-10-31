@@ -1,5 +1,5 @@
 fastapi
-uvicorn[standard]==0.34.2
+uvicorn
 ipykernel
 python-multipart
 openai
