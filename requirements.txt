@@ -5,6 +5,7 @@ openai
 beautifulsoup4
 requests
 psycopg2-binary
+databutton
 sqlalchemy
 sendgrid
 pydantic[email]
