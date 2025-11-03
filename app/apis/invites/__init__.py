@@ -182,6 +182,44 @@ async def get_all_invites(current_user: dict = Depends(get_user_from_request)):
     # However, schema enforces uppercase for role, and frontend expects uppercase for status.
     return [InviteRead(**inv) for inv in result.data]
 
+class RemoveTeamUserRequest(BaseModel):
+    user_id: str
+
+@router.post("/remove-team-user", response_model=ResponseMessage, name="remove_team_user_from_company")
+async def remove_team_user(request: RemoveTeamUserRequest = Body(...), current_user: dict = Depends(get_user_from_request)):
+    """
+    Remove a user from the company by setting their company_id to null.
+    This preserves the user record but disassociates them from the company.
+    Only users from the same company can be removed.
+    """
+    supabase = get_supabase_client()
+    company_id = current_user.get("company_id")
+    user_id = current_user.get("id")
+
+    if not company_id or not user_id:
+        raise HTTPException(status_code=403, detail="User or Company ID not found.")
+
+    # Verify the target user belongs to the same company
+    target_user_res = supabase.table("users").select("id, company_id").eq("id", request.user_id).maybe_single().execute()
+    
+    if not target_user_res.data:
+        raise HTTPException(status_code=404, detail="User not found.")
+    
+    if target_user_res.data.get("company_id") != company_id:
+        raise HTTPException(status_code=403, detail="User does not belong to your company.")
+    
+    # Prevent removing yourself
+    if request.user_id == user_id:
+        raise HTTPException(status_code=400, detail="You cannot remove yourself from the company.")
+    
+    # Remove company association by setting company_id to null
+    update_result = supabase.table("users").update({"company_id": None}).eq("id", request.user_id).eq("company_id", company_id).execute()
+    
+    if not update_result.data:
+        raise HTTPException(status_code=500, detail="Failed to remove user from company.")
+    
+    return ResponseMessage(message="User removed from company successfully.")
+
 @router.delete("/{invite_id}", response_model=ResponseMessage, name="delete_invite_from_company")
 async def delete_invite(invite_id: str, current_user: dict = Depends(get_user_from_request)):
     """
