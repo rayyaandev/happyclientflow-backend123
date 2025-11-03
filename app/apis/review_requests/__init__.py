@@ -26,6 +26,34 @@ def get_supabase_client() -> Client:
 
 from typing import Optional
 
+def translate_title(raw_title: Optional[str], user_language: str) -> Optional[str]:
+    """Normalize and translate courtesy titles based on user language.
+    Currently supports German translations.
+    """
+    if not raw_title:
+        return None
+
+    # normalize variants like "Mr", "MR.", "mister" → "mr"
+    key = raw_title.strip().replace('.', '').lower()
+
+    if user_language == 'de':
+        mapping = {
+            'mr': 'Herr',
+            'mister': 'Herr',
+            'sir': 'Herr',
+            'mrs': 'Frau',
+            'ms': 'Frau',
+            'miss': 'Frau',
+            'madam': 'Frau',
+            # If already in German, keep as is
+            'herr': 'Herr',
+            'frau': 'Frau',
+        }
+        return mapping.get(key, raw_title)
+
+    # default: return as provided for non-DE
+    return raw_title
+
 class SendReviewRequestPayload(BaseModel):
     client_id: str
     client_email: Optional[EmailStr] = None
@@ -70,13 +98,7 @@ async def send_review_request(
 
     
     # 2. Translate title based on user's language
-    translated_title = payload.title
-    if user_language == 'de':
-        if payload.title == 'Mr.':
-            translated_title = 'Herr'
-        elif payload.title == 'Mrs.':
-            translated_title = 'Frau'
-        # Note: If title is something else, it remains unchanged.
+    translated_title = translate_title(payload.title, user_language)
     
     # 3. Fetch the message template from Supabase
     try:
