@@ -68,13 +68,8 @@ def get_supabase_client() -> Client:
 
 # --- Helper Functions ---
 def _get_base_url() -> str:
-    if mode == Mode.DEV:
-        return "http://localhost:5173"
-    elif mode == Mode.PROD:
-        return "https://happyclientflow-frontend-nine.vercel.app/"
-    else:
-        print(f"Warning: Unknown environment mode '{mode}'. Defaulting to production URL for email link.")
-        return "https://happyclientflow-frontend-nine.vercel.app/" # Fallback
+    """Get the frontend base URL for invitation links."""
+    return "https://happyclientflow-frontend.vercel.app/"
 
 def _send_actual_invitation_email(email_to: EmailStr, role: str, token: str, company_name: Optional[str], language: str):
     sendgrid_api_key = db.secrets.get("SENDGRID_API_KEY")
