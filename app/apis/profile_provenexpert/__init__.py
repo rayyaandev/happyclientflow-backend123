@@ -69,11 +69,14 @@ async def profile_provenexpert(request: ScrapeRequest):
                 # Get all reviews (already flattened in cache)
                 all_reviews = scraped_data.get("reviews", [])
                 
+                # IMPORTANT: Only count reviews we actually scraped (exclude external sources shown on the page)
+                only_scraped_count = len(all_reviews)
+                
                 # Create response data with all reviews
                 response_data = [{
                     "url": scraped_data.get("url", request.url),
                     "summaryScore": scraped_data.get("summaryScore", ""),
-                    "summaryReviewsCount": scraped_data.get("summaryReviewsCount", ""),
+                    "summaryReviewsCount": str(only_scraped_count),
                     "reviews": all_reviews
                 }]
                 
@@ -234,9 +237,18 @@ async def profile_provenexpert(request: ScrapeRequest):
         }
         db.storage.json.put(cache_key, new_cache_entry)
 
+        # Ensure summaryReviewsCount reflects ONLY scraped reviews length (exclude external sources)
+        transformed_data = []
+        if dataset_items and len(dataset_items) > 0:
+            first = dict(dataset_items[0])
+            first["summaryReviewsCount"] = str(len(all_reviews))
+            transformed_data.append(first)
+        else:
+            transformed_data = dataset_items
+
         # Return all reviews in flat structure
         message = "Data scraped successfully." if all_reviews else "No data found, but request was cached."
-        return ScrapeResponse(data=dataset_items, message=message, pagination=pagination_meta)
+        return ScrapeResponse(data=transformed_data, message=message, pagination=pagination_meta)
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An error occurred during scraping: {str(e)}")
