@@ -93,7 +93,7 @@ def create_reminders_if_not_exists(
 
         # --- Prepare reminder data ---
         reminders_to_insert = []
-        base_url = "https://app.happyclientflow.de" # Or from config
+        base_url = "https://happyclientflow-frontend-nine.vercel.app" # Or from config
         review_link = f"{base_url}/feedback?client_id={client['id']}&company_name={company['name'].replace(' ', '%20')}"
 
         for template in templates:

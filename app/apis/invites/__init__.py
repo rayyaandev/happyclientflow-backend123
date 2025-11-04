@@ -69,12 +69,12 @@ def get_supabase_client() -> Client:
 # --- Helper Functions ---
 def _get_base_url() -> str:
     if mode == Mode.DEV:
-        return "https://databutton.com/_projects/722024f4-d06c-4ad3-9271-27bac1ebab31/dbtn/devx/ui/"
+        return "http://localhost:5173"
     elif mode == Mode.PROD:
-        return "https://app.happyclientflow.de/"
+        return "https://happyclientflow-frontend-nine.vercel.app/"
     else:
         print(f"Warning: Unknown environment mode '{mode}'. Defaulting to production URL for email link.")
-        return "https://app.happyclientflow.de/" # Fallback
+        return "https://happyclientflow-frontend-nine.vercel.app/" # Fallback
 
 def _send_actual_invitation_email(email_to: EmailStr, role: str, token: str, company_name: Optional[str], language: str):
     sendgrid_api_key = db.secrets.get("SENDGRID_API_KEY")
@@ -215,8 +215,8 @@ async def remove_team_user(request: RemoveTeamUserRequest = Body(...), current_u
     if not company_id:
         raise HTTPException(status_code=403, detail="Company ID not found for user.")
 
-    # Verify the target user belongs to the same company
-    target_user_res = supabase.table("users").select("id, company_id").eq("id", request.user_id).maybe_single().execute()
+    # Verify the target user belongs to the same company and get their email
+    target_user_res = supabase.table("users").select("id, company_id, email").eq("id", request.user_id).maybe_single().execute()
     
     if not target_user_res.data:
         raise HTTPException(status_code=404, detail="User not found.")
@@ -228,13 +228,52 @@ async def remove_team_user(request: RemoveTeamUserRequest = Body(...), current_u
     if request.user_id == user_id:
         raise HTTPException(status_code=400, detail="You cannot remove yourself from the company.")
     
-    # Remove company association by setting company_id to null
-    update_result = supabase.table("users").update({"company_id": None}).eq("id", request.user_id).eq("company_id", company_id).execute()
+    target_user_email = target_user_res.data.get("email")
     
-    if not update_result.data:
-        raise HTTPException(status_code=500, detail="Failed to remove user from company.")
+    # Check for pending or accepted invites for this user's email and company
+    # Order by created_at desc to get the most recent invite first
+    invite_res = supabase.table("invites").select("id, status, email").eq("email", target_user_email).eq("company_id", company_id).order("created_at", desc=True).execute()
     
-    return ResponseMessage(message="User removed from company successfully.")
+    if invite_res.data and len(invite_res.data) > 0:
+        # Get the most recent invite (or first one if multiple)
+        invite = invite_res.data[0]
+        invite_status = invite.get("status", "").upper()
+        
+        if invite_status == "PENDING":
+            # Delete the pending invite
+            delete_result = supabase.table("invites").delete().eq("id", invite["id"]).execute()
+            # Also remove company_id if user is already associated (edge case)
+            if target_user_res.data.get("company_id"):
+                supabase.table("users").update({"company_id": None}).eq("id", request.user_id).eq("company_id", company_id).execute()
+            
+            if delete_result.data:
+                return ResponseMessage(message="Pending invitation removed successfully.")
+            else:
+                raise HTTPException(status_code=500, detail="Failed to delete pending invitation.")
+        elif invite_status == "ACCEPTED":
+            # Remove company association by setting company_id to null
+            update_result = supabase.table("users").update({"company_id": None}).eq("id", request.user_id).eq("company_id", company_id).execute()
+            
+            if not update_result.data:
+                raise HTTPException(status_code=500, detail="Failed to remove user from company.")
+            
+            return ResponseMessage(message="User removed from company successfully.")
+        else:
+            # For EXPIRED or other statuses, just remove company_id
+            update_result = supabase.table("users").update({"company_id": None}).eq("id", request.user_id).eq("company_id", company_id).execute()
+            
+            if not update_result.data:
+                raise HTTPException(status_code=500, detail="Failed to remove user from company.")
+            
+            return ResponseMessage(message="User removed from company successfully.")
+    else:
+        # No invite found, just remove company association (user might have been added directly)
+        update_result = supabase.table("users").update({"company_id": None}).eq("id", request.user_id).eq("company_id", company_id).execute()
+        
+        if not update_result.data:
+            raise HTTPException(status_code=500, detail="Failed to remove user from company.")
+        
+        return ResponseMessage(message="User removed from company successfully.")
 
 @router.delete("/by-id/{invite_id}", response_model=ResponseMessage, name="delete_invite_from_company")
 async def delete_invite(invite_id: str, current_user: dict = Depends(get_user_from_request)):
