@@ -186,18 +186,34 @@ class RemoveTeamUserRequest(BaseModel):
     user_id: str
 
 @router.post("/remove-team-user", response_model=ResponseMessage, name="remove_team_user_from_company")
-async def remove_team_user(request: RemoveTeamUserRequest = Body(...), current_user: dict = Depends(get_user_from_request)):
+async def remove_team_user(request: RemoveTeamUserRequest = Body(...), current_user_id: str = Depends(get_user_from_request)):
     """
     Remove a user from the company by setting their company_id to null.
     This preserves the user record but disassociates them from the company.
     Only users from the same company can be removed.
     """
     supabase = get_supabase_client()
-    company_id = current_user.get("company_id")
-    user_id = current_user.get("id")
+    if not current_user_id:
+        raise HTTPException(status_code=401, detail="Unauthorized")
 
-    if not company_id or not user_id:
-        raise HTTPException(status_code=403, detail="User or Company ID not found.")
+    # Load current user's company from DB
+    current_user_res = (
+        supabase
+        .table("users")
+        .select("id, company_id")
+        .eq("id", current_user_id)
+        .maybe_single()
+        .execute()
+    )
+
+    if not current_user_res.data:
+        raise HTTPException(status_code=403, detail="Authenticated user not found.")
+
+    company_id = current_user_res.data.get("company_id")
+    user_id = current_user_res.data.get("id")
+
+    if not company_id:
+        raise HTTPException(status_code=403, detail="Company ID not found for user.")
 
     # Verify the target user belongs to the same company
     target_user_res = supabase.table("users").select("id, company_id").eq("id", request.user_id).maybe_single().execute()
