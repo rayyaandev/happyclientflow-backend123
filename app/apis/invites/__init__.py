@@ -220,7 +220,7 @@ async def remove_team_user(request: RemoveTeamUserRequest = Body(...), current_u
     
     return ResponseMessage(message="User removed from company successfully.")
 
-@router.delete("/{invite_id}", response_model=ResponseMessage, name="delete_invite_from_company")
+@router.delete("/by-id/{invite_id}", response_model=ResponseMessage, name="delete_invite_from_company")
 async def delete_invite(invite_id: str, current_user: dict = Depends(get_user_from_request)):
     """
     Delete an invite, ensuring it belongs to the authenticated user's company.
