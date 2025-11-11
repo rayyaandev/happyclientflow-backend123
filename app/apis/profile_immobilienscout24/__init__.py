@@ -3,12 +3,15 @@ This API module handles scraping of ImmobilienScout24 profile reviews using Apif
 """
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-import databutton as db
+import os
 from apify_client import ApifyClientAsync
 import hashlib
 import json
 from datetime import datetime, timedelta, timezone
 from app.libs.api_utils import single_request_per_url
+
+# In-memory cache (simple dict) - replace with persistent storage if needed
+CACHE = {}
 
 # =====================
 # API Router
@@ -66,40 +69,64 @@ async def profile_immobilienscout24(request: ScrapeRequest):
 
     # 1. Try returning from cache
     try:
-        cached_entry = db.storage.json.get(cache_key)
-        cached_timestamp = datetime.fromisoformat(cached_entry["timestamp"])
-        if datetime.now(timezone.utc) - cached_timestamp < ttl:
-            cached_data = cached_entry["data"]
-            if cached_data and len(cached_data) > 0:
-                scraped_data = cached_data[0]
-                all_reviews = scraped_data.get("reviews", [])
-                response_data = [
-                    ScrapedProfile(
-                        url=scraped_data.get("url", request.url),
-                        average_score=scraped_data.get("average_score"),
-                        total_reviews=scraped_data.get("total_reviews"),
-                        reviews=all_reviews,
+        if cache_key in CACHE:
+            cached_entry = CACHE[cache_key]
+            cached_timestamp = datetime.fromisoformat(cached_entry["timestamp"])
+            if datetime.now(timezone.utc) - cached_timestamp < ttl:
+                cached_data = cached_entry["data"]
+                if cached_data and len(cached_data) > 0:
+                    scraped_data = cached_data[0]
+                    all_reviews = scraped_data.get("reviews", [])
+                    response_data = [
+                        ScrapedProfile(
+                            url=scraped_data.get("url", request.url),
+                            average_score=scraped_data.get("average_score"),
+                            total_reviews=scraped_data.get("total_reviews"),
+                            reviews=all_reviews,
+                        )
+                    ]
+                    pagination_meta = PaginationMeta(
+                        current_page=1,
+                        has_next_page=False,
+                        total_pages=1,
+                        total_reviews=scraped_data.get("total_reviews") or len(all_reviews),
                     )
-                ]
-                pagination_meta = PaginationMeta(
-                    current_page=1,
-                    has_next_page=False,
-                    total_pages=1,
-                    total_reviews=scraped_data.get("total_reviews") or len(all_reviews),
-                )
-                return ScrapeResponse(
-                    data=response_data,
-                    message="Data retrieved from cache.",
-                    pagination=pagination_meta,
-                )
+                    return ScrapeResponse(
+                        data=response_data,
+                        message="Data retrieved from cache.",
+                        pagination=pagination_meta,
+                    )
     except Exception:
         pass
 
     # 2. Scrape using Apify
     try:
-        apify_api_key = db.secrets.get("APIFY_API_KEY")
+        apify_api_key = os.getenv("APIFY_API_KEY")
         # TODO: Replace with actual ImmobilienScout24 Apify actor ID
-        immobilienscout24_actor_id = "YOUR_ACTOR_ID_HERE"
+        immobilienscout24_actor_id = os.getenv("IMMOBILIENSCOUT24_ACTOR_ID", "YOUR_ACTOR_ID_HERE")
+
+        # If actor ID is not configured, return empty results gracefully
+        if immobilienscout24_actor_id == "YOUR_ACTOR_ID_HERE" or not immobilienscout24_actor_id:
+            print("⚠️ ImmobilienScout24 Apify actor ID not configured. Returning empty results.")
+            response_data = [
+                ScrapedProfile(
+                    url=request.url,
+                    average_score=None,
+                    total_reviews=None,
+                    reviews=[],
+                )
+            ]
+            pagination_meta = PaginationMeta(
+                current_page=1,
+                has_next_page=False,
+                total_pages=1,
+                total_reviews=0,
+            )
+            return ScrapeResponse(
+                data=response_data,
+                message="ImmobilienScout24 scraping not yet configured.",
+                pagination=pagination_meta,
+            )
 
         if not apify_api_key:
             raise HTTPException(status_code=500, detail="Apify API key is not configured.")
@@ -168,13 +195,10 @@ async function pageFunction(context) {
         )
 
         # 3. Cache results
-        db.storage.json.put(
-            cache_key,
-            {
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "data": dataset_items,
-            },
-        )
+        CACHE[cache_key] = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "data": dataset_items,
+        }
 
         response_data = [
             ScrapedProfile(
