@@ -17,3 +17,4 @@ cloudscraper==1.2.71
 apify-client==2.2.1
 firecrawl-py==4.5.0
 zenrows==1.4.0
+supabase-auth==2.20.0
