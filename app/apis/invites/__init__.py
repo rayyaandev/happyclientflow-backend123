@@ -69,7 +69,7 @@ def get_supabase_client() -> Client:
 # --- Helper Functions ---
 def _get_base_url() -> str:
     """Get the frontend base URL for invitation links."""
-    return "https://happyclientflow-frontend.vercel.app/"
+    return "https://app.happyclientflow.de/"
 
 def _send_actual_invitation_email(email_to: EmailStr, role: str, token: str, company_name: Optional[str], language: str):
     sendgrid_api_key = db.secrets.get("SENDGRID_API_KEY")
