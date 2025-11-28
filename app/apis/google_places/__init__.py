@@ -59,9 +59,12 @@ def get_place_details(
         PlaceDetailsResponse: Comprehensive place data including reviews and ratings
     """
     print(f"[AUTH] Fetching Google Places details for user: {current_user}")
+
+    print(f"DEBUG place_id: {place_id}")
     
     # Get Google Places API key from secrets
     api_key = db.secrets.get("GOOGLE_PLACES_API_KEY")
+    print(f"DEBUG api_key: {api_key}")
     if not api_key:
         raise HTTPException(
             status_code=500, 

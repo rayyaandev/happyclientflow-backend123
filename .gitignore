@@ -40,3 +40,5 @@ coverage.xml
 
 # Uvicorn
 *.log
+
+.runner.sh

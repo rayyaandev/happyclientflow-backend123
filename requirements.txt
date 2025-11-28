@@ -12,7 +12,7 @@ pydantic[email]==2.11.9
 supabase==2.20.0
 stripe==13.0.1
 twilio==9.8.5
-lxml==4.8.0
+lxml==5.2.2
 cloudscraper==1.2.71
 apify-client==2.2.1
 firecrawl-py==4.5.0

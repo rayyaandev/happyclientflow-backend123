@@ -52,6 +52,9 @@ class Profile(BaseModel):
 class Company(BaseModel):
     id: str
     name: str
+    logo_url: str
+    donation_text: str
+    is_donation_message_displayed: bool
 
 class CompanyInfoResponse(BaseModel):
     products: List[Product]
@@ -130,6 +133,8 @@ def get_company_info_for_feedback(
                     if employee_id not in employee_profiles_map:
                         employee_profiles_map[employee_id] = []
                     employee_profiles_map[employee_id].append(profiles_data[profile_id])
+
+        print(f"DEBUG company_data hello is it saving or what: {company_data} {profiles_response} {employee_profiles_map}, {employee_ids}, {employees}")
 
         return CompanyInfoResponse(
             products=products, 
