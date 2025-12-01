@@ -134,7 +134,23 @@ def get_company_info_for_feedback(
                         employee_profiles_map[employee_id] = []
                     employee_profiles_map[employee_id].append(profiles_data[profile_id])
 
-        print(f"DEBUG company_data hello is it saving or what: {company_data} {profiles_response} {employee_profiles_map}, {employee_ids}, {employees}")
+        # 8. Find the default Google profile for fallback cases
+        default_google_profile = next(
+            (profile for profile in profiles_data.values() if profile.profile_type == "google"),
+            None
+        )
+        
+        # 9. Fallback for employees with no profiles
+        for employee_id in employee_ids:
+            if employee_id not in employee_profiles_map or not employee_profiles_map[employee_id]:
+                if default_google_profile:
+                    employee_profiles_map[employee_id] = [default_google_profile]
+
+        # 10. Add a "default" entry for when no employee is selected (e.g., "somebody else")
+        if default_google_profile:
+            employee_profiles_map["default"] = [default_google_profile]
+
+        print(f"DEBUG company_data hello is it saving or what: {employee_profiles_map}")
 
         return CompanyInfoResponse(
             products=products, 
