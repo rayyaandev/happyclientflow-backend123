@@ -116,16 +116,23 @@ def get_company_info_for_feedback(
                 employees.append(Employee(id=employee_id, full_name=full_name))
                 employee_ids.append(employee_id)
 
-        # 5. Get all profiles for the company
-        profiles_response = supabase.from_("profiles").select("id, name, profile_type, link").eq("company_id", company_id).execute()
+        # 5. Get all profiles for the company (including main_profile flag)
+        profiles_response = supabase.from_("profiles").select("id, name, profile_type, link, main_profile").eq("company_id", company_id).execute()
         profiles_data = {str(row['id']): Profile(id=str(row['id']), name=row['name'], profile_type=row['profile_type'], link=row['link']) for row in profiles_response.data}
+        
+        # 6. Identify main profiles (profiles marked as main_profile = true)
+        main_profiles = [
+            Profile(id=str(row['id']), name=row['name'], profile_type=row['profile_type'], link=row['link'])
+            for row in profiles_response.data 
+            if row.get('main_profile', False)
+        ]
 
-        # 6. Get employee-profile mappings
+        # 7. Get employee-profile mappings
         employee_profiles_map: Dict[str, List[Profile]] = {}
         if employee_ids: # Only query if there are employees
             profile_employees_response = supabase.from_("profile_employees").select("profile_id, employee_id").in_("employee_id", employee_ids).execute()
         
-            # 7. Construct the employee_profiles dictionary
+            # 8. Construct the employee_profiles dictionary
             for mapping in profile_employees_response.data:
                 profile_id = str(mapping['profile_id'])
                 employee_id = str(mapping['employee_id'])
@@ -134,23 +141,36 @@ def get_company_info_for_feedback(
                         employee_profiles_map[employee_id] = []
                     employee_profiles_map[employee_id].append(profiles_data[profile_id])
 
-        # 8. Find the default Google profile for fallback cases
+        # 9. Find the default Google profile for fallback (used when no main profiles exist)
         default_google_profile = next(
             (profile for profile in profiles_data.values() if profile.profile_type == "google"),
             None
         )
         
-        # 9. Fallback for employees with no profiles
+        # 10. Determine the default profiles to use
+        # If main profiles exist, use them; otherwise fallback to Google profile
+        default_profiles = main_profiles if main_profiles else ([default_google_profile] if default_google_profile else [])
+        
+        # 11. For each employee: add main profiles to their linked profiles (deduplicated)
         for employee_id in employee_ids:
-            if employee_id not in employee_profiles_map or not employee_profiles_map[employee_id]:
-                if default_google_profile:
-                    employee_profiles_map[employee_id] = [default_google_profile]
+            existing_profiles = employee_profiles_map.get(employee_id, [])
+            existing_profile_ids = {p.id for p in existing_profiles}
+            
+            # Add main profiles that aren't already in the employee's list
+            for main_profile in main_profiles:
+                if main_profile.id not in existing_profile_ids:
+                    existing_profiles.append(main_profile)
+            
+            # If employee still has no profiles, use default profiles
+            if not existing_profiles:
+                existing_profiles = default_profiles.copy()
+            
+            employee_profiles_map[employee_id] = existing_profiles
 
-        # 10. Add a "default" entry for when no employee is selected (e.g., "somebody else")
-        if default_google_profile:
-            employee_profiles_map["default"] = [default_google_profile]
+        # 12. Add a "default" entry for when no employee is selected (e.g., "somebody else")
+        employee_profiles_map["default"] = default_profiles
 
-        print(f"DEBUG company_data hello is it saving or what: {employee_profiles_map}")
+        print(f"DEBUG employee_profiles_map: {employee_profiles_map}")
 
         return CompanyInfoResponse(
             products=products, 
