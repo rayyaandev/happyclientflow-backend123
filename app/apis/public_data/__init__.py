@@ -151,21 +151,11 @@ def get_company_info_for_feedback(
         # If main profiles exist, use them; otherwise fallback to Google profile
         default_profiles = main_profiles if main_profiles else ([default_google_profile] if default_google_profile else [])
         
-        # 11. For each employee: add main profiles to their linked profiles (deduplicated)
+        # 11. For employees with NO linked profiles, assign the default profiles
         for employee_id in employee_ids:
-            existing_profiles = employee_profiles_map.get(employee_id, [])
-            existing_profile_ids = {p.id for p in existing_profiles}
-            
-            # Add main profiles that aren't already in the employee's list
-            for main_profile in main_profiles:
-                if main_profile.id not in existing_profile_ids:
-                    existing_profiles.append(main_profile)
-            
-            # If employee still has no profiles, use default profiles
-            if not existing_profiles:
-                existing_profiles = default_profiles.copy()
-            
-            employee_profiles_map[employee_id] = existing_profiles
+            if employee_id not in employee_profiles_map or not employee_profiles_map[employee_id]:
+                # Employee has no linked profiles, use default profiles (main profiles or Google fallback)
+                employee_profiles_map[employee_id] = default_profiles.copy()
 
         # 12. Add a "default" entry for when no employee is selected (e.g., "somebody else")
         employee_profiles_map["default"] = default_profiles
