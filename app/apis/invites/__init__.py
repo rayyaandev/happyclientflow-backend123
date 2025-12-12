@@ -12,6 +12,7 @@ from sendgrid.helpers.mail import Mail, From
 from app.env import mode, Mode # Import current environment mode
 from supabase import create_client, Client
 from app.libs.auth import get_user_from_request # Assuming this handles user auth
+from app.libs.auth_utils import require_admin  # Role-based access control
 
 # Path for the registration page, ensure it matches frontend routing
 REGISTER_PATH = "register" # e.g., app.com/register?token=xyz
@@ -140,11 +141,15 @@ def _send_actual_invitation_email(email_to: EmailStr, role: str, token: str, com
 # NEW Endpoint specifically for sending email after frontend creates invite in Supabase
 # This is what `inviteStore.ts` will call via the brain client.
 @router.post("/send-email", response_model=ResponseMessage, name="send_invitation_email") # Explicit name for brain client
-async def send_invitation_email_via_api(payload: SendInvitationEmailRequest = Body(...)):
+async def send_invitation_email_via_api(
+    payload: SendInvitationEmailRequest = Body(...),
+    current_user_id: str = Depends(require_admin)  # Only admins can send invites
+):
     """
     Receives invite details (invite already created in Supabase by frontend) 
     and triggers sending the invitation email.
     This endpoint DOES NOT create or modify invite records in Supabase itself.
+    Only admins can access this endpoint.
     """
     email_sent = _send_actual_invitation_email(
         email_to=payload.email,
@@ -181,11 +186,14 @@ class RemoveTeamUserRequest(BaseModel):
     user_id: str
 
 @router.post("/remove-team-user", response_model=ResponseMessage, name="remove_team_user_from_company")
-async def remove_team_user(request: RemoveTeamUserRequest = Body(...), current_user_id: str = Depends(get_user_from_request)):
+async def remove_team_user(
+    request: RemoveTeamUserRequest = Body(...), 
+    current_user_id: str = Depends(require_admin)  # Only admins can remove team members
+):
     """
     Remove a user from the company by setting their company_id to null.
     This preserves the user record but disassociates them from the company.
-    Only users from the same company can be removed.
+    Only admins from the same company can remove users.
     """
     supabase = get_supabase_client()
     if not current_user_id:
@@ -271,13 +279,31 @@ async def remove_team_user(request: RemoveTeamUserRequest = Body(...), current_u
         return ResponseMessage(message="User removed from company successfully.")
 
 @router.delete("/by-id/{invite_id}", response_model=ResponseMessage, name="delete_invite_from_company")
-async def delete_invite(invite_id: str, current_user: dict = Depends(get_user_from_request)):
+async def delete_invite(
+    invite_id: str, 
+    current_user_id: str = Depends(require_admin)  # Only admins can delete invites
+):
     """
     Delete an invite, ensuring it belongs to the authenticated user's company.
+    Only admins can delete invitations.
     """
     supabase = get_supabase_client()
-    company_id = current_user.get("company_id")
-    user_id = current_user.get("id")
+    
+    # First get the admin's company_id
+    current_user_res = (
+        supabase
+        .table("users")
+        .select("id, company_id")
+        .eq("id", current_user_id)
+        .maybe_single()
+        .execute()
+    )
+    
+    if not current_user_res.data:
+        raise HTTPException(status_code=403, detail="Authenticated user not found.")
+    
+    company_id = current_user_res.data.get("company_id")
+    user_id = current_user_res.data.get("id")
 
     if not company_id or not user_id:
         raise HTTPException(status_code=403, detail="User or Company ID not found.")
