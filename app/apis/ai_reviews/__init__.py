@@ -263,7 +263,10 @@ Kleine Unregelmäßigkeit: {use_imperfection}
 Sanfte Kritik: {use_soft_critique}
 
 TEXTREGELN
-Ausschließlich Ich-Form (kein „wir", kein „man").
+WICHTIG - PERSPEKTIVE: Die Bewertung wird von MIR als Kunde geschrieben. Ausschließlich Ich-Form verwenden!
+❌ FALSCH: "Sie haben sich gewandt", "Man wurde beraten", "Der Kunde war zufrieden", "Es wurde geholfen"
+✅ RICHTIG: "Ich habe mich gewandt", "Ich wurde beraten", "Ich war zufrieden", "Mir wurde geholfen"
+Niemals dritte Person oder passive Formulierungen mit "man/sie/es" verwenden.
 Eröffnung auf {anchor} fokussieren.
 Eingaben integrieren: grund_der_zusammenarbeit optional, highlight konkret hervorheben, gefuehl_waehrend_der_zusammenarbeit subtil einbauen wenn positiv/neutral, ansprechpartner nach Regel nennen.
 Zufriedenheit implizit ausdrücken („rundum zufrieden", „sehr gute Erfahrung"), keine Sterne nennen.
@@ -288,7 +291,7 @@ Nur den finalen Bewertungstext zurückgeben, ohne Labels, Metadaten oder Anführ
         completion = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
-                {"role": "system", "content": "Du bist ein Experte für natürliche deutsche Google-Bewertungen. Du schreibst authentische Bewertungen in Ich-Form, die wie von echten Kunden verfasst klingen. Befolge die Regeln exakt und variiere den Stil basierend auf den Vorgaben."},
+                {"role": "system", "content": "Du bist ein Experte für natürliche deutsche Google-Bewertungen. Du schreibst authentische Bewertungen IMMER aus der Ich-Perspektive, als ob DU der Kunde bist. NIEMALS dritte Person (sie/man/er/es) verwenden! Befolge die Regeln exakt und variiere den Stil basierend auf den Vorgaben."},
                 {"role": "user", "content": prompt}
             ],
             temperature=0.8,
