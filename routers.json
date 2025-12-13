@@ -139,6 +139,11 @@
       "name": "profile_immobilienscout24",
       "version": "2025-01-15T00:00:00",
       "disableAuth": true
+    },
+    "sentiment": {
+      "name": "sentiment",
+      "version": "2025-12-13T00:00:00",
+      "disableAuth": true
     }
   }
 }
