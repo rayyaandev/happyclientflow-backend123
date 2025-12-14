@@ -69,28 +69,30 @@ class SentimentResponse(BaseModel):
 # ===============================================================================
 # Sentiment Generation Prompt
 # ===============================================================================
-SENTIMENT_PROMPT = """You are analyzing customer reviews for a local business.
+SENTIMENT_PROMPT = """Du analysierst Kundenbewertungen für ein lokales Unternehmen.
 
-The input contains the {review_count} most recent stored reviews from various review platforms.
+Die Eingabe enthält die {review_count} neuesten gespeicherten Bewertungen von verschiedenen Bewertungsplattformen.
 
-Your task is to generate an "Overall Sentiment" summary that describes the general mood and customer perception of the business based on these reviews.
+Deine Aufgabe ist es, eine "Gesamtstimmung"-Zusammenfassung auf Deutsch zu erstellen, die die allgemeine Stimmung und Kundenwahrnehmung des Unternehmens basierend auf diesen Bewertungen beschreibt.
 
-Guidelines:
-- Do NOT list or quote individual reviews.
-- Do NOT mention reviewer names.
-- Focus on overall emotional tone and recurring themes.
-- Be neutral, analytical, and professional.
-- Avoid marketing language or exaggeration.
+Richtlinien:
+- KEINE einzelnen Bewertungen auflisten oder zitieren.
+- KEINE Rezensenten-Namen erwähnen.
+- Fokussiere dich auf den allgemeinen emotionalen Ton und wiederkehrende Themen.
+- Sei neutral, analytisch und professionell.
+- Vermeide Marketing-Sprache oder Übertreibungen.
 
-Structure the output in 3 short paragraphs:
-1. Overall sentiment and general customer perception
-2. Most common positive themes mentioned by customers
-3. Recurring improvement areas (if any), phrased constructively
+Strukturiere die Ausgabe in 3 kurzen Absätzen:
+1. Gesamtstimmung und allgemeine Kundenwahrnehmung
+2. Häufigste positive Themen, die von Kunden genannt werden
+3. Wiederkehrende Verbesserungsbereiche (falls vorhanden), konstruktiv formuliert
 
-Length:
-- 80–120 words total.
+Länge:
+- 80–120 Wörter insgesamt.
 
-Input (last {review_count} reviews):
+WICHTIG: Die gesamte Ausgabe MUSS auf Deutsch sein!
+
+Eingabe (letzte {review_count} Bewertungen):
 {reviews}"""
 
 # ===============================================================================
