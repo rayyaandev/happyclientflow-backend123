@@ -137,6 +137,7 @@ class GenerateReviewRequest(BaseModel):
     recommendation: str # 'ja', 'nein', 'vielleicht'
     customer_uuid: str
     length: str = "mittel"  # 'kurz', 'mittel', 'lang'
+    existing_reviews: list[str] = []  # List of existing review texts for uniqueness check
 
 class GenerateReviewResponse(BaseModel):
     """
@@ -185,6 +186,25 @@ def weighted_random_choice(weights: dict) -> str:
     choices = list(weights.keys())
     probabilities = list(weights.values())
     return random.choices(choices, weights=probabilities)[0]
+
+def format_existing_reviews(reviews: list[str]) -> str:
+    """Format existing reviews for the prompt"""
+    if not reviews:
+        return ""
+    
+    # Filter out empty reviews and limit to avoid token overflow
+    valid_reviews = [r.strip() for r in reviews if r and r.strip()]
+    if not valid_reviews:
+        return ""
+    
+    # Format each review with a number
+    formatted = []
+    for i, review in enumerate(valid_reviews, 1):
+        # Truncate very long reviews to save tokens
+        truncated = review[:500] + "..." if len(review) > 500 else review
+        formatted.append(f"{i}. \"{truncated}\"")
+    
+    return "\n".join(formatted)
 
 @router.post(
     "/generate-review",
@@ -235,7 +255,11 @@ def generate_ai_review(
     emoji = random.choice(PROMPT_COMPONENTS["emojiSet"]) if use_emoji else ""
     soft_critique_text = random.choice(PROMPT_COMPONENTS["softCritique"]) if use_soft_critique else ""
     
-    # --- Step 4: Construct the sophisticated German prompt ---
+    # --- Step 4: Format existing reviews for uniqueness check ---
+    existing_reviews_text = format_existing_reviews(request.existing_reviews)
+    has_existing_reviews = bool(existing_reviews_text)
+    
+    # --- Step 5: Construct the sophisticated German prompt ---
     prompt = f"""AUFGABE
 Erstelle eine natürliche Google-Bewertung auf Deutsch in ausschließlicher Ich-Perspektive.
 Gib NUR den Bewertungstext zurück – keine Einleitung, keine Labels.
@@ -281,6 +305,21 @@ SPEZIELLE ANWEISUNGEN
 {f"Sanfte Kritik einbauen: {soft_critique_text}" if use_soft_critique else ""}
 {f"Kleine Unregelmäßigkeit erlaubt (fehlender Punkt, verkürzter Satz)" if use_imperfection else ""}
 
+{"EINZIGARTIGKEIT - KRITISCH WICHTIG" if has_existing_reviews else ""}
+{f'''Hier sind alle bestehenden Bewertungen dieses Unternehmens:
+---
+{existing_reviews_text}
+---
+
+STRENGE REGELN FÜR EINZIGARTIGKEIT:
+1. NIEMALS gleiche oder ähnliche Eröffnungssätze wie in bestehenden Bewertungen verwenden
+2. NIEMALS gleiche Phrasen, Redewendungen oder Formulierungen kopieren oder paraphrasieren
+3. ANDERE Satzstrukturen und Satzmuster verwenden als in den bestehenden Bewertungen
+4. ANDERE Wörter und Synonyme wählen - wenn bestehende Bewertungen "kompetent" sagen, nutze z.B. "fachkundig" oder "versiert"
+5. ANDEREN Fokus setzen - wenn bestehende Bewertungen den Service loben, betone z.B. die Kommunikation oder Erreichbarkeit
+6. Die generierte Bewertung muss sich VOLLSTÄNDIG von allen obigen Bewertungen unterscheiden
+7. Bei Ähnlichkeit zu einer bestehenden Bewertung: komplett neu formulieren''' if has_existing_reviews else ""}
+
 DATENFEHLER
 Fehlende Eingaben weglassen, ohne Platzhalter oder Entschuldigung.
 
@@ -288,13 +327,19 @@ AUSGABE
 Nur den finalen Bewertungstext zurückgeben, ohne Labels, Metadaten oder Anführungszeichen."""
 
     try:
+        # Build system message - add uniqueness instruction if existing reviews provided
+        system_message = "Du bist ein Experte für natürliche deutsche Google-Bewertungen. Du schreibst authentische Bewertungen IMMER aus der Ich-Perspektive, als ob DU der Kunde bist. NIEMALS dritte Person (sie/man/er/es) verwenden! Befolge die Regeln exakt und variiere den Stil basierend auf den Vorgaben."
+        
+        if has_existing_reviews:
+            system_message += " WICHTIG: Dir werden bestehende Bewertungen gezeigt. Deine generierte Bewertung MUSS sich vollständig davon unterscheiden - andere Eröffnung, andere Formulierungen, andere Struktur, andere Wortwahl. Keine Ähnlichkeiten erlaubt!"
+        
         completion = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
-                {"role": "system", "content": "Du bist ein Experte für natürliche deutsche Google-Bewertungen. Du schreibst authentische Bewertungen IMMER aus der Ich-Perspektive, als ob DU der Kunde bist. NIEMALS dritte Person (sie/man/er/es) verwenden! Befolge die Regeln exakt und variiere den Stil basierend auf den Vorgaben."},
+                {"role": "system", "content": system_message},
                 {"role": "user", "content": prompt}
             ],
-            temperature=0.8,
+            temperature=0.9 if has_existing_reviews else 0.8,  # Higher temperature for more variation when avoiding duplicates
             max_tokens=300,
         )
         generated_text = completion.choices[0].message.content
