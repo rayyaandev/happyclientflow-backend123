@@ -14,11 +14,10 @@ Endpoints:
 import requests
 import hashlib
 from datetime import datetime, timedelta, timezone
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import List, Optional
 import databutton as db
-from app.libs.auth import require_auth
 from apify_client import ApifyClientAsync
 
 router = APIRouter(prefix="/google-places")
@@ -156,8 +155,7 @@ async def fetch_reviews_from_apify(place_id: str) -> List[ReviewData]:
 # =====================
 @router.get("/details/{place_id}")
 async def get_place_details(
-    place_id: str,
-    current_user: str = Depends(require_auth)
+    place_id: str
 ) -> PlaceDetailsResponse:
     """
     Fetch detailed information about a place using Google Places API.
@@ -165,13 +163,11 @@ async def get_place_details(
     
     Args:
         place_id: The unique Google Places ID for the business/location
-        current_user: The authenticated user's ID from JWT token
         
     Returns:
         PlaceDetailsResponse: Comprehensive place data including reviews and ratings
     """
-    print(f"[AUTH] Fetching Google Places details for user: {current_user}")
-    print(f"[DEBUG] place_id: {place_id}")
+    print(f"[DEBUG] Fetching Google Places details for place_id: {place_id}")
     
     # Get Google Places API key from secrets
     api_key = db.secrets.get("GOOGLE_PLACES_API_KEY")
