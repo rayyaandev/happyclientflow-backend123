@@ -87,6 +87,7 @@ def create_app() -> FastAPI:
             "http://localhost:3000",
             "https://happyclientflow-frontend.vercel.app",
             "https://happyclientflow-frontend-nine.vercel.app",
+            "https://happyclientflow-frontend-git-feat-l-4eb1b3-rayyaandevs-projects.vercel.app",
             "https://app.happyclientflow.de"
         ],
         allow_credentials=True,
