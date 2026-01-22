@@ -112,8 +112,7 @@ The {payload.company_name} Team"""
         raise HTTPException(status_code=500, detail="Failed to fetch referral invite template.")
 
     # 4. Generate the referral signup link
-    # In production, use your actual domain
-    base_url = "http://localhost:5173"  # Change this to your production URL
+    base_url = "https://happyclientflow-frontend-git-feat-l-4eb1b3-rayyaandevs-projects.vercel.app"
     referral_link = f"{base_url}/referral-signup?customer={payload.client_id}"
 
     # 5. Interpolate variables into the email body and subject
