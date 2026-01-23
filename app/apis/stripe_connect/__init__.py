@@ -312,7 +312,6 @@ async def get_account_status(referrer_id: str):
 
             # Update database with fresh data
             supabase.table('referrers').update({
-                'stripe_connect_status': account.status,
                 'stripe_connect_details_submitted': details_submitted,
                 'stripe_connect_charges_enabled': charges_enabled,
                 'stripe_connect_payouts_enabled': payouts_enabled,
@@ -321,7 +320,7 @@ async def get_account_status(referrer_id: str):
 
             return AccountStatusResponse(
                 account_id=account_id,
-                status=account.status,
+                status="active" if details_submitted else "pending",
                 details_submitted=details_submitted,
                 charges_enabled=charges_enabled,
                 payouts_enabled=payouts_enabled,
