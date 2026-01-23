@@ -122,7 +122,7 @@ async def create_account_link(request: CreateAccountLinkRequest):
             try:
                 account = stripe.Account.retrieve(existing_account_id)
                 print(f"[StripeConnect] Using existing account {existing_account_id} for referrer {request.referrer_id}")
-            except stripe.error.InvalidRequestError:
+            except stripe._error.InvalidRequestError:
                 # Account doesn't exist, create new one
                 existing_account_id = None
                 print(f"[StripeConnect] Existing account {existing_account_id} not found in Stripe, will create new one")
@@ -147,7 +147,6 @@ async def create_account_link(request: CreateAccountLinkRequest):
             # Store account ID in database
             supabase.table('referrers').update({
                 'stripe_connect_account_id': account.id,
-                'stripe_connect_status': account.status,
                 'country_code': request.country_code,
             }).eq('id', request.referrer_id).execute()
 
@@ -172,7 +171,7 @@ async def create_account_link(request: CreateAccountLinkRequest):
             expires_at=account_link.expires_at
         )
 
-    except stripe.error.StripeError as e:
+    except stripe._error.StripeError as e:
         print(f"[StripeConnect] Stripe error: {str(e)}")
         raise HTTPException(status_code=400, detail=f"Stripe error: {str(e)}") from e
     except Exception as e:
@@ -212,7 +211,7 @@ async def refresh_account_link(request: RefreshAccountLinkRequest):
         # Verify account exists
         try:
             account = stripe.Account.retrieve(account_id)
-        except stripe.error.InvalidRequestError:
+        except stripe._error.InvalidRequestError:
             raise HTTPException(status_code=404, detail="Stripe account not found")
 
         # Create new account link
@@ -232,7 +231,7 @@ async def refresh_account_link(request: RefreshAccountLinkRequest):
             expires_at=account_link.expires_at
         )
 
-    except stripe.error.StripeError as e:
+    except stripe._error.StripeError as e:
         print(f"[StripeConnect] Stripe error: {str(e)}")
         raise HTTPException(status_code=400, detail=f"Stripe error: {str(e)}") from e
     except Exception as e:
@@ -329,7 +328,7 @@ async def get_account_status(referrer_id: str):
                 onboarded=(details_submitted and payouts_enabled)
             )
 
-        except stripe.error.InvalidRequestError:
+        except stripe._error.InvalidRequestError:
             # Account doesn't exist in Stripe
             return AccountStatusResponse(
                 account_id=account_id,
@@ -370,7 +369,7 @@ async def stripe_connect_webhook(request: Request, stripe_signature: str = Heade
     except ValueError:
         print("[StripeConnect] Webhook - Invalid payload")
         raise HTTPException(status_code=400, detail="Invalid payload")
-    except stripe.error.SignatureVerificationError:
+    except stripe._error.SignatureVerificationError:
         print("[StripeConnect] Webhook - Invalid signature")
         raise HTTPException(status_code=400, detail="Invalid signature")
 
