@@ -134,6 +134,7 @@ async def create_account_link(request: CreateAccountLinkRequest):
                 country=request.country_code,
                 email=customer_email,
                 capabilities={
+                    "card_payments": {"requested": True},
                     "transfers": {"requested": True},
                 },
                 business_type="individual",
