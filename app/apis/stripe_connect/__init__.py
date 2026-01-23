@@ -23,22 +23,37 @@ from app.env import Mode, mode
 
 router = APIRouter(prefix="/stripe-connect")
 
-# Environment-based Stripe configuration
-if mode == Mode.PROD:
-    # Production: Use live Stripe keys
-    stripe.api_key = db.secrets.get("STRIPE_SECRET_KEY_LIVE")
-    STRIPE_CONNECT_CLIENT_ID = db.secrets.get("STRIPE_CONNECT_CLIENT_ID_LIVE")
-    STRIPE_CONNECT_WEBHOOK_SECRET = db.secrets.get("STRIPE_CONNECT_WEBHOOK_SECRET_LIVE")
-else:
-    # Development: Use test/sandbox Stripe keys
-    stripe.api_key = db.secrets.get("STRIPE_SECRET_KEY_TEST")
-    STRIPE_CONNECT_CLIENT_ID = db.secrets.get("STRIPE_CONNECT_CLIENT_ID_TEST") or "ca_TWYtgz8CqADQz1KSx3pWoNwcq5NufrhG"
-    STRIPE_CONNECT_WEBHOOK_SECRET = db.secrets.get("STRIPE_CONNECT_WEBHOOK_SECRET_TEST") or "whsec_lARJBdIPYYfhjHJ2xzzQJqrt2tfiw7sW"
+# Global variables for lazy initialization
+_stripe_initialized = False
+_supabase_client: Optional[Client] = None
+_stripe_connect_webhook_secret: Optional[str] = None
 
-# Initialize Supabase
-supabase_url = db.secrets.get("SUPABASE_URL")
-supabase_service_key = db.secrets.get("SUPABASE_SERVICE_KEY")
-supabase: Client = create_client(supabase_url, supabase_service_key)
+def _init_stripe():
+    """Lazy initialization of Stripe and secrets"""
+    global _stripe_initialized, _stripe_connect_webhook_secret
+    if _stripe_initialized:
+        return
+
+    # Environment-based Stripe configuration
+    if mode == Mode.PROD:
+        # Production: Use live Stripe keys
+        stripe.api_key = db.secrets.get("STRIPE_SECRET_KEY_LIVE")
+        _stripe_connect_webhook_secret = db.secrets.get("STRIPE_CONNECT_WEBHOOK_SECRET_LIVE")
+    else:
+        # Development: Use test/sandbox Stripe keys
+        stripe.api_key = db.secrets.get("STRIPE_SECRET_KEY_TEST")
+        _stripe_connect_webhook_secret = db.secrets.get("STRIPE_CONNECT_WEBHOOK_SECRET_TEST") or "whsec_lARJBdIPYYfhjHJ2xzzQJqrt2tfiw7sW"
+
+    _stripe_initialized = True
+
+def _get_supabase() -> Client:
+    """Lazy initialization of Supabase client"""
+    global _supabase_client
+    if _supabase_client is None:
+        supabase_url = db.secrets.get("SUPABASE_URL")
+        supabase_service_key = db.secrets.get("SUPABASE_SERVICE_KEY")
+        _supabase_client = create_client(supabase_url, supabase_service_key)
+    return _supabase_client
 
 # Pydantic Models
 class CreateAccountLinkRequest(BaseModel):
@@ -77,6 +92,9 @@ async def create_account_link(request: CreateAccountLinkRequest):
     3. Generates AccountLink for OAuth onboarding
     4. Returns onboarding URL for frontend redirect
     """
+    _init_stripe()
+    supabase = _get_supabase()
+
     if not stripe.api_key:
         raise HTTPException(status_code=500, detail="Stripe not configured")
 
@@ -168,6 +186,9 @@ async def refresh_account_link(request: RefreshAccountLinkRequest):
 
     Account links expire after 60 minutes. This endpoint generates a new one.
     """
+    _init_stripe()
+    supabase = _get_supabase()
+
     if not stripe.api_key:
         raise HTTPException(status_code=500, detail="Stripe not configured")
 
@@ -248,6 +269,9 @@ async def get_account_status(referrer_id: str):
 
     Used by frontend to poll account status after OAuth redirect
     """
+    _init_stripe()
+    supabase = _get_supabase()
+
     try:
         # Fetch referrer from database
         referrer_response = supabase.table('referrers')\
@@ -330,6 +354,9 @@ async def stripe_connect_webhook(request: Request, stripe_signature: str = Heade
     - account.external_account.created: Bank account connected
     - capability.updated: Payout capability status changed
     """
+    _init_stripe()
+    supabase = _get_supabase()
+
     if not stripe.api_key:
         raise HTTPException(status_code=500, detail="Stripe not configured")
 
@@ -337,7 +364,7 @@ async def stripe_connect_webhook(request: Request, stripe_signature: str = Heade
 
     try:
         event = stripe.Webhook.construct_event(
-            body, stripe_signature, STRIPE_CONNECT_WEBHOOK_SECRET
+            body, stripe_signature, _stripe_connect_webhook_secret
         )
     except ValueError:
         print("[StripeConnect] Webhook - Invalid payload")
