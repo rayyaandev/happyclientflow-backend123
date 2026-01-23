@@ -149,6 +149,11 @@
       "name": "referral_invite",
       "version": "2026-01-06T00:00:00",
       "disableAuth": true
+    },
+    "stripe_connect": {
+      "name": "stripe_connect",
+      "version": "2026-01-23T00:00:00",
+      "disableAuth": true
     }
   }
 }
