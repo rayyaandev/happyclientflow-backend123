@@ -42,7 +42,7 @@ def _init_stripe():
     else:
         # Development: Use test/sandbox Stripe keys
         stripe.api_key = db.secrets.get("STRIPE_SECRET_KEY_TEST")
-        _stripe_connect_webhook_secret = db.secrets.get("STRIPE_CONNECT_WEBHOOK_SECRET_TEST") or "whsec_lARJBdIPYYfhjHJ2xzzQJqrt2tfiw7sW"
+        _stripe_connect_webhook_secret = "whsec_lARJBdIPYYfhjHJ2xzzQJqrt2tfiw7sW"
 
     _stripe_initialized = True
 
