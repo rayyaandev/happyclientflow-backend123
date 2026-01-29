@@ -14,6 +14,7 @@ Used by: Frontend referral signup components, Stripe Connect webhooks
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 import base64
+import os
 import urllib.parse
 from fastapi import APIRouter, HTTPException, Request, Header
 from fastapi.responses import RedirectResponse
@@ -42,9 +43,9 @@ def _init_stripe():
         stripe.api_key = db.secrets.get("STRIPE_SECRET_KEY_LIVE")
         _stripe_connect_webhook_secret = db.secrets.get("STRIPE_CONNECT_WEBHOOK_SECRET_LIVE")
     else:
-        # Development: Use test/sandbox Stripe keys
-        stripe.api_key = db.secrets.get("STRIPE_SECRET_KEY_TEST")
-        _stripe_connect_webhook_secret = "whsec_lARJBdIPYYfhjHJ2xzzQJqrt2tfiw7sW"
+        # Development: Use test/sandbox Stripe keys (env var first, then databutton)
+        stripe.api_key = os.environ.get("STRIPE_SECRET_KEY_TEST") or db.secrets.get("STRIPE_SECRET_KEY_TEST")
+        _stripe_connect_webhook_secret = os.environ.get("STRIPE_CONNECT_WEBHOOK_SECRET_TEST") or "whsec_lARJBdIPYYfhjHJ2xzzQJqrt2tfiw7sW"
 
     _stripe_initialized = True
 
@@ -118,12 +119,16 @@ def _get_stripe_connect_client_id() -> str:
     if mode == Mode.PROD:
         return db.secrets.get("STRIPE_CONNECT_CLIENT_ID_LIVE")
     else:
-        return db.secrets.get("STRIPE_CONNECT_CLIENT_ID_TEST")
+        # Try environment variable first (for local dev), then fall back to databutton secrets
+        return os.environ.get("STRIPE_CONNECT_CLIENT_ID_TEST") or db.secrets.get("STRIPE_CONNECT_CLIENT_ID_TEST")
 
 
 def _get_backend_base_url() -> str:
     """Get the backend base URL for OAuth redirect URI"""
-    return "https://happyclientflow-backend123.onrender.com"
+    if mode == Mode.PROD:
+        return "https://happyclientflow-backend123.onrender.com"
+    else:
+        return "http://localhost:8000"
 
 
 def _get_frontend_base_url() -> str:
@@ -131,7 +136,7 @@ def _get_frontend_base_url() -> str:
     if mode == Mode.PROD:
         return "https://app.happyclientflow.de"
     else:
-        return "https://app.happyclientflow.de"
+        return "http://localhost:5173"
 
 
 @router.post("/create-account-link", response_model=CreateAccountLinkResponse)
