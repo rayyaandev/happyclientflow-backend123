@@ -13,6 +13,8 @@ Used by: Frontend referral signup components, Stripe Connect webhooks
 
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any
+import base64
+import urllib.parse
 from fastapi import APIRouter, HTTPException, Request, Header
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
@@ -79,6 +81,57 @@ class AccountStatusResponse(BaseModel):
     charges_enabled: bool = False
     payouts_enabled: bool = False
     onboarded: bool = False
+
+
+# --- Owner Stripe Connect Models (Standard OAuth) ---
+
+class CreateOwnerOAuthLinkRequest(BaseModel):
+    company_id: str
+    return_url: str  # Frontend path to redirect to after OAuth (e.g. /settings or /onboarding)
+
+class CreateOwnerOAuthLinkResponse(BaseModel):
+    oauth_url: str
+
+class OwnerConnectStatusResponse(BaseModel):
+    connected: bool = False
+    stripe_account_id: Optional[str] = None
+    stripe_connect_enabled: bool = False
+    stripe_connect_onboarded_at: Optional[str] = None
+
+class DisconnectOwnerRequest(BaseModel):
+    company_id: str
+
+class CreateConnectedCustomerRequest(BaseModel):
+    company_id: str
+    email: str
+    name: str
+    phone: Optional[str] = None
+
+class CreateConnectedCustomerResponse(BaseModel):
+    customer_id: Optional[str] = None
+    success: bool = False
+    error: Optional[str] = None
+
+
+def _get_stripe_connect_client_id() -> str:
+    """Get the Stripe Connect Client ID based on environment"""
+    if mode == Mode.PROD:
+        return db.secrets.get("STRIPE_CONNECT_CLIENT_ID_LIVE")
+    else:
+        return db.secrets.get("STRIPE_CONNECT_CLIENT_ID_TEST")
+
+
+def _get_backend_base_url() -> str:
+    """Get the backend base URL for OAuth redirect URI"""
+    return "https://happyclientflow-backend123.onrender.com"
+
+
+def _get_frontend_base_url() -> str:
+    """Get the frontend base URL for redirects after OAuth"""
+    if mode == Mode.PROD:
+        return "https://app.happyclientflow.de"
+    else:
+        return "https://app.happyclientflow.de"
 
 
 @router.post("/create-account-link", response_model=CreateAccountLinkResponse)
@@ -450,3 +503,299 @@ async def stripe_connect_webhook(request: Request, stripe_signature: str = Heade
     except Exception as e:
         print(f"[StripeConnect] Webhook processing failed: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Webhook processing failed: {str(e)}") from e
+
+
+# =============================================================================
+# Owner Stripe Connect Endpoints (Standard OAuth for business owners)
+# =============================================================================
+
+@router.post("/owner/create-oauth-link", response_model=CreateOwnerOAuthLinkResponse)
+async def create_owner_oauth_link(request: CreateOwnerOAuthLinkRequest):
+    """
+    Generate Stripe Connect OAuth authorization URL for a business owner.
+
+    The business owner will be redirected to Stripe to authorize their account.
+    After authorization, Stripe redirects to our callback endpoint which
+    exchanges the code for a connected account ID.
+    """
+    _init_stripe()
+    supabase = _get_supabase()
+
+    if not stripe.api_key:
+        raise HTTPException(status_code=500, detail="Stripe not configured")
+
+    try:
+        # Verify company exists
+        company_response = supabase.table('companies') \
+            .select('id, stripe_connect_account_id') \
+            .eq('id', request.company_id) \
+            .single() \
+            .execute()
+
+        if not company_response.data:
+            raise HTTPException(status_code=404, detail="Company not found")
+
+        # Check if already connected
+        if company_response.data.get('stripe_connect_account_id'):
+            raise HTTPException(status_code=400, detail="Company already has a connected Stripe account")
+
+        # Build OAuth URL
+        client_id = _get_stripe_connect_client_id()
+        backend_base = _get_backend_base_url()
+        redirect_uri = f"{backend_base}/routes/stripe-connect/owner/oauth/callback"
+
+        # Encode company_id and return_url in state parameter
+        state_data = f"{request.company_id}:{base64.urlsafe_b64encode(request.return_url.encode()).decode()}"
+
+        oauth_url = (
+            f"https://connect.stripe.com/oauth/authorize"
+            f"?response_type=code"
+            f"&client_id={client_id}"
+            f"&scope=read_write"
+            f"&redirect_uri={urllib.parse.quote(redirect_uri, safe='')}"
+            f"&state={urllib.parse.quote(state_data, safe='')}"
+        )
+
+        print(f"[StripeConnect] Generated owner OAuth link for company {request.company_id}")
+
+        return CreateOwnerOAuthLinkResponse(oauth_url=oauth_url)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[StripeConnect] Error creating owner OAuth link: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}") from e
+
+
+@router.get("/owner/oauth/callback")
+async def owner_oauth_callback(request: Request):
+    """
+    Handle Stripe Connect OAuth callback for business owners.
+
+    Stripe redirects here after the owner authorizes (or cancels).
+    We exchange the authorization code for a connected account ID,
+    store it in the companies table, and redirect to the frontend.
+    """
+    _init_stripe()
+    supabase = _get_supabase()
+
+    params = dict(request.query_params)
+    code = params.get('code')
+    state = params.get('state')
+    error = params.get('error')
+    error_description = params.get('error_description')
+
+    frontend_base = _get_frontend_base_url()
+
+    print(f"[StripeConnect] Owner OAuth callback received - code: {bool(code)}, state: {state}, error: {error}")
+
+    # Decode state to get company_id and return path
+    company_id = None
+    return_path = "/settings"
+    if state:
+        try:
+            parts = state.split(':', 1)
+            company_id = parts[0]
+            if len(parts) > 1:
+                return_path = base64.urlsafe_b64decode(parts[1].encode()).decode()
+        except Exception as decode_err:
+            print(f"[StripeConnect] Error decoding state: {decode_err}")
+
+    if error:
+        print(f"[StripeConnect] Owner OAuth error: {error} - {error_description}")
+        error_msg = urllib.parse.quote(error_description or error)
+        return RedirectResponse(
+            url=f"{frontend_base}{return_path}?stripe_connect_error={error_msg}"
+        )
+
+    if not code or not company_id:
+        return RedirectResponse(
+            url=f"{frontend_base}{return_path}?stripe_connect_error=missing_params"
+        )
+
+    try:
+        # Exchange authorization code for connected account
+        token_response = stripe.OAuth.token(grant_type='authorization_code', code=code)
+        connected_account_id = token_response.get('stripe_user_id')
+
+        if not connected_account_id:
+            print("[StripeConnect] No stripe_user_id in token response")
+            return RedirectResponse(
+                url=f"{frontend_base}{return_path}?stripe_connect_error=no_account_id"
+            )
+
+        print(f"[StripeConnect] Owner OAuth success - account: {connected_account_id}, company: {company_id}")
+
+        # Store in database
+        supabase.table('companies').update({
+            'stripe_connect_account_id': connected_account_id,
+            'stripe_connect_enabled': True,
+            'stripe_connect_onboarded_at': datetime.now(timezone.utc).isoformat(),
+        }).eq('id', company_id).execute()
+
+        return RedirectResponse(
+            url=f"{frontend_base}{return_path}?stripe_connected=true"
+        )
+
+    except stripe._error.StripeError as e:
+        print(f"[StripeConnect] Owner OAuth token exchange error: {str(e)}")
+        error_msg = urllib.parse.quote(str(e))
+        return RedirectResponse(
+            url=f"{frontend_base}{return_path}?stripe_connect_error={error_msg}"
+        )
+    except Exception as e:
+        print(f"[StripeConnect] Owner OAuth internal error: {str(e)}")
+        error_msg = urllib.parse.quote(str(e))
+        return RedirectResponse(
+            url=f"{frontend_base}{return_path}?stripe_connect_error={error_msg}"
+        )
+
+
+@router.get("/owner/status/{company_id}", response_model=OwnerConnectStatusResponse)
+async def get_owner_connect_status(company_id: str):
+    """
+    Get the Stripe Connect status for a business owner's company.
+    """
+    _init_stripe()
+    supabase = _get_supabase()
+
+    try:
+        company_response = supabase.table('companies') \
+            .select('stripe_connect_account_id, stripe_connect_enabled, stripe_connect_onboarded_at') \
+            .eq('id', company_id) \
+            .single() \
+            .execute()
+
+        if not company_response.data:
+            raise HTTPException(status_code=404, detail="Company not found")
+
+        data = company_response.data
+        account_id = data.get('stripe_connect_account_id')
+
+        # Optionally verify the account still exists in Stripe
+        if account_id:
+            try:
+                stripe.Account.retrieve(account_id)
+            except stripe._error.InvalidRequestError:
+                # Account no longer exists in Stripe, clean up
+                print(f"[StripeConnect] Owner account {account_id} no longer exists in Stripe")
+                supabase.table('companies').update({
+                    'stripe_connect_account_id': None,
+                    'stripe_connect_enabled': False,
+                    'stripe_connect_onboarded_at': None,
+                }).eq('id', company_id).execute()
+                return OwnerConnectStatusResponse(connected=False)
+
+        return OwnerConnectStatusResponse(
+            connected=bool(account_id),
+            stripe_account_id=account_id,
+            stripe_connect_enabled=data.get('stripe_connect_enabled', False),
+            stripe_connect_onboarded_at=data.get('stripe_connect_onboarded_at'),
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[StripeConnect] Error getting owner connect status: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}") from e
+
+
+@router.post("/owner/disconnect")
+async def disconnect_owner_stripe(request: DisconnectOwnerRequest):
+    """
+    Disconnect a business owner's Stripe account.
+
+    Deauthorizes the account on Stripe's side and clears the connection
+    from the database. Also disables the referral program since it
+    requires a connected Stripe account.
+    """
+    _init_stripe()
+    supabase = _get_supabase()
+
+    try:
+        company_response = supabase.table('companies') \
+            .select('stripe_connect_account_id') \
+            .eq('id', request.company_id) \
+            .single() \
+            .execute()
+
+        if not company_response.data:
+            raise HTTPException(status_code=404, detail="Company not found")
+
+        account_id = company_response.data.get('stripe_connect_account_id')
+        if not account_id:
+            raise HTTPException(status_code=400, detail="No Stripe account connected")
+
+        # Deauthorize on Stripe side
+        try:
+            client_id = _get_stripe_connect_client_id()
+            stripe.OAuth.deauthorize(client_id=client_id, stripe_user_id=account_id)
+            print(f"[StripeConnect] Deauthorized owner account {account_id}")
+        except stripe._error.StripeError as e:
+            print(f"[StripeConnect] Error deauthorizing owner account: {str(e)}")
+            # Continue cleanup even if deauth fails
+
+        # Clear from database and disable referral program
+        supabase.table('companies').update({
+            'stripe_connect_account_id': None,
+            'stripe_connect_enabled': False,
+            'stripe_connect_onboarded_at': None,
+            'referral_program_enabled': False,
+        }).eq('id', request.company_id).execute()
+
+        print(f"[StripeConnect] Disconnected and cleaned up company {request.company_id}")
+
+        return {"status": "disconnected"}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[StripeConnect] Error disconnecting owner: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}") from e
+
+
+@router.post("/owner/create-customer", response_model=CreateConnectedCustomerResponse)
+async def create_connected_customer(request: CreateConnectedCustomerRequest):
+    """
+    Create a Stripe Customer under the business owner's connected account.
+
+    Called when a lead submits the referral landing page form.
+    The customer is created on the connected account so the business
+    owner can later bill them directly.
+    """
+    _init_stripe()
+    supabase = _get_supabase()
+
+    try:
+        # Get connected account
+        company_response = supabase.table('companies') \
+            .select('stripe_connect_account_id, stripe_connect_enabled') \
+            .eq('id', request.company_id) \
+            .single() \
+            .execute()
+
+        if not company_response.data:
+            return CreateConnectedCustomerResponse(success=False, error="Company not found")
+
+        account_id = company_response.data.get('stripe_connect_account_id')
+        if not account_id:
+            return CreateConnectedCustomerResponse(success=False, error="No connected Stripe account")
+
+        # Create customer on the connected account
+        customer = stripe.Customer.create(
+            email=request.email,
+            name=request.name,
+            phone=request.phone,
+            stripe_account=account_id,
+        )
+
+        print(f"[StripeConnect] Created customer {customer.id} on connected account {account_id}")
+
+        return CreateConnectedCustomerResponse(customer_id=customer.id, success=True)
+
+    except stripe._error.StripeError as e:
+        print(f"[StripeConnect] Error creating connected customer: {str(e)}")
+        return CreateConnectedCustomerResponse(success=False, error=str(e))
+    except Exception as e:
+        print(f"[StripeConnect] Internal error creating customer: {str(e)}")
+        return CreateConnectedCustomerResponse(success=False, error=str(e))
