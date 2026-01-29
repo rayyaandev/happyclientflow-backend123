@@ -606,16 +606,19 @@ async def owner_oauth_callback(request: Request):
         except Exception as decode_err:
             print(f"[StripeConnect] Error decoding state: {decode_err}")
 
+    # Determine query string separator based on whether return_path already has query params
+    separator = "&" if "?" in return_path else "?"
+
     if error:
         print(f"[StripeConnect] Owner OAuth error: {error} - {error_description}")
         error_msg = urllib.parse.quote(error_description or error)
         return RedirectResponse(
-            url=f"{frontend_base}{return_path}?stripe_connect_error={error_msg}"
+            url=f"{frontend_base}{return_path}{separator}stripe_connect_error={error_msg}"
         )
 
     if not code or not company_id:
         return RedirectResponse(
-            url=f"{frontend_base}{return_path}?stripe_connect_error=missing_params"
+            url=f"{frontend_base}{return_path}{separator}stripe_connect_error=missing_params"
         )
 
     try:
@@ -626,7 +629,7 @@ async def owner_oauth_callback(request: Request):
         if not connected_account_id:
             print("[StripeConnect] No stripe_user_id in token response")
             return RedirectResponse(
-                url=f"{frontend_base}{return_path}?stripe_connect_error=no_account_id"
+                url=f"{frontend_base}{return_path}{separator}stripe_connect_error=no_account_id"
             )
 
         print(f"[StripeConnect] Owner OAuth success - account: {connected_account_id}, company: {company_id}")
@@ -639,20 +642,20 @@ async def owner_oauth_callback(request: Request):
         }).eq('id', company_id).execute()
 
         return RedirectResponse(
-            url=f"{frontend_base}{return_path}?stripe_connected=true"
+            url=f"{frontend_base}{return_path}{separator}stripe_connected=true"
         )
 
     except stripe._error.StripeError as e:
         print(f"[StripeConnect] Owner OAuth token exchange error: {str(e)}")
         error_msg = urllib.parse.quote(str(e))
         return RedirectResponse(
-            url=f"{frontend_base}{return_path}?stripe_connect_error={error_msg}"
+            url=f"{frontend_base}{return_path}{separator}stripe_connect_error={error_msg}"
         )
     except Exception as e:
         print(f"[StripeConnect] Owner OAuth internal error: {str(e)}")
         error_msg = urllib.parse.quote(str(e))
         return RedirectResponse(
-            url=f"{frontend_base}{return_path}?stripe_connect_error={error_msg}"
+            url=f"{frontend_base}{return_path}{separator}stripe_connect_error={error_msg}"
         )
 
 
