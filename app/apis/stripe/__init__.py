@@ -53,8 +53,8 @@ else:
 # Startup debug (safe)
 print("[STRIPE] Startup config")
 print(f"[STRIPE] DATABUTTON_SERVICE_TYPE={os.environ.get('DATABUTTON_SERVICE_TYPE')!r} -> mode={mode}")
-print(f"[STRIPE] stripe.api_key: {_secret_debug_info(stripe.api_key)}")
-print(f"[STRIPE] STRIPE_WEBHOOK_SECRET: {_secret_debug_info(STRIPE_WEBHOOK_SECRET)}")
+print(f"[STRIPE] stripe.api_key: {stripe.api_key}")
+print(f"[STRIPE] STRIPE_WEBHOOK_SECRET: {STRIPE_WEBHOOK_SECRET}")
 
 # Initialize Supabase
 supabase_url = db.secrets.get("SUPABASE_URL")
@@ -259,8 +259,8 @@ async def stripe_webhook(request: Request, stripe_signature: str = Header(None))
     # Safe runtime debug
     print("[STRIPE] Webhook received")
     print(f"[STRIPE] mode={mode} DATABUTTON_SERVICE_TYPE={os.environ.get('DATABUTTON_SERVICE_TYPE')!r}")
-    print(f"[STRIPE] stripe.api_key: {_secret_debug_info(stripe.api_key)}")
-    print(f"[STRIPE] STRIPE_WEBHOOK_SECRET: {_secret_debug_info(STRIPE_WEBHOOK_SECRET)}")
+    print(f"[STRIPE] stripe.api_key: {(stripe.api_key)}")
+    print(f"[STRIPE] STRIPE_WEBHOOK_SECRET: {(STRIPE_WEBHOOK_SECRET)}")
     print(f"[STRIPE] stripe_signature header present: {bool(stripe_signature)}")
     if stripe_signature:
         # Print a short prefix only; full header is sensitive.
