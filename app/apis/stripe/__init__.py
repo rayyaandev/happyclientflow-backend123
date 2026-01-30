@@ -18,12 +18,26 @@ from fastapi import APIRouter, HTTPException, Request, Header, Depends
 from pydantic import BaseModel
 import stripe
 import databutton as db
+import os
 from supabase import create_client, Client
 from app.libs.auth import require_auth
 from app.env import Mode, mode
 import asyncio
 
 router = APIRouter(prefix="/stripe")
+
+# ---------------------
+# Debug helpers
+# ---------------------
+def _secret_debug_info(value: Optional[str]) -> str:
+    """
+    Return safe info about a secret without exposing it.
+    """
+    if not value:
+        return "missing"
+    v = str(value)
+    prefix = "whsec_" if v.startswith("whsec_") else ("sk_live_" if v.startswith("sk_live_") else ("sk_test_" if v.startswith("sk_test_") else "set"))
+    return f"{prefix} (len={len(v)})"
 
 # Environment-based Stripe configuration
 if mode == Mode.PROD:
@@ -34,6 +48,12 @@ else:
     # Development: Use test/sandbox Stripe keys
     stripe.api_key = db.secrets.get("STRIPE_SECRET_KEY_TEST")
     STRIPE_WEBHOOK_SECRET = db.secrets.get("STRIPE_WEBHOOK_SECRET_TEST")
+
+# Startup debug (safe)
+print("[STRIPE] Startup config")
+print(f"[STRIPE] DATABUTTON_SERVICE_TYPE={os.environ.get('DATABUTTON_SERVICE_TYPE')!r} -> mode={mode}")
+print(f"[STRIPE] stripe.api_key: {_secret_debug_info(stripe.api_key)}")
+print(f"[STRIPE] STRIPE_WEBHOOK_SECRET: {_secret_debug_info(STRIPE_WEBHOOK_SECRET)}")
 
 # Initialize Supabase
 supabase_url = db.secrets.get("SUPABASE_URL")
@@ -235,6 +255,16 @@ async def stripe_webhook(request: Request, stripe_signature: str = Header(None))
         raise HTTPException(status_code=500, detail="Stripe not configured")
     
     body = await request.body()
+    # Safe runtime debug
+    print("[STRIPE] Webhook received")
+    print(f"[STRIPE] mode={mode} DATABUTTON_SERVICE_TYPE={os.environ.get('DATABUTTON_SERVICE_TYPE')!r}")
+    print(f"[STRIPE] stripe.api_key: {_secret_debug_info(stripe.api_key)}")
+    print(f"[STRIPE] STRIPE_WEBHOOK_SECRET: {_secret_debug_info(STRIPE_WEBHOOK_SECRET)}")
+    print(f"[STRIPE] stripe_signature header present: {bool(stripe_signature)}")
+    if stripe_signature:
+        # Print a short prefix only; full header is sensitive.
+        print(f"[STRIPE] stripe_signature prefix: {stripe_signature[:24]}...")
+    print(f"[STRIPE] raw body length: {len(body)} bytes")
     
     try:
         event = stripe.Webhook.construct_event(
@@ -242,8 +272,15 @@ async def stripe_webhook(request: Request, stripe_signature: str = Header(None))
         )
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid payload")
-    except stripe.error.SignatureVerificationError:
-        raise HTTPException(status_code=400, detail="Invalid signature")
+    except Exception as e:
+        # Stripe library versions differ: exception may live under stripe._error
+        sig_err_type = getattr(getattr(stripe, "_error", None), "SignatureVerificationError", None)
+        if sig_err_type and isinstance(e, sig_err_type):
+            print(f"[STRIPE] Signature verification failed: {str(e)}")
+            raise HTTPException(status_code=400, detail="Invalid signature")
+        # Fallback: re-raise unexpected errors
+        print(f"[STRIPE] Unexpected error during signature verification: {type(e).__name__}: {e}")
+        raise
     
     print(f"Received Stripe webhook: {event['type']}")
     
