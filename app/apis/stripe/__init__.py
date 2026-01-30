@@ -19,6 +19,7 @@ from pydantic import BaseModel
 import stripe
 import databutton as db
 import os
+import json
 from supabase import create_client, Client
 from app.libs.auth import require_auth
 from app.env import Mode, mode
@@ -276,6 +277,15 @@ async def stripe_webhook(request: Request, stripe_signature: str = Header(None))
         # Stripe library versions differ: exception may live under stripe._error
         sig_err_type = getattr(getattr(stripe, "_error", None), "SignatureVerificationError", None)
         if sig_err_type and isinstance(e, sig_err_type):
+            # Helpful debug: inspect unverified payload for mode/type (do NOT trust it for business logic)
+            try:
+                payload = json.loads(body.decode("utf-8"))
+                livemode = payload.get("livemode")
+                event_type = payload.get("type")
+                event_id = payload.get("id")
+                print(f"[STRIPE] Unverified payload hints: livemode={livemode} type={event_type} id={event_id}")
+            except Exception:
+                print("[STRIPE] Could not parse payload JSON for livemode/type debug")
             print(f"[STRIPE] Signature verification failed: {str(e)}")
             raise HTTPException(status_code=400, detail="Invalid signature")
         # Fallback: re-raise unexpected errors
