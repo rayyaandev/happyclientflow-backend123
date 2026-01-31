@@ -14,6 +14,7 @@ Used by: Frontend referral signup components, Stripe Connect webhooks
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 import base64
+import os
 import urllib.parse
 from fastapi import APIRouter, HTTPException, Request, Header
 from fastapi.responses import RedirectResponse
@@ -42,9 +43,9 @@ def _init_stripe():
         stripe.api_key = db.secrets.get("STRIPE_SECRET_KEY_LIVE")
         _stripe_connect_webhook_secret = db.secrets.get("STRIPE_CONNECT_WEBHOOK_SECRET_LIVE")
     else:
-        # Development: Use test/sandbox Stripe keys
-        stripe.api_key = db.secrets.get("STRIPE_SECRET_KEY_TEST")
-        _stripe_connect_webhook_secret = "whsec_lARJBdIPYYfhjHJ2xzzQJqrt2tfiw7sW"
+        # Development: Use test/sandbox Stripe keys (env var first, then databutton)
+        stripe.api_key = os.environ.get("STRIPE_SECRET_KEY_TEST") or db.secrets.get("STRIPE_SECRET_KEY_TEST")
+        _stripe_connect_webhook_secret = os.environ.get("STRIPE_CONNECT_WEBHOOK_SECRET_TEST") or "whsec_lARJBdIPYYfhjHJ2xzzQJqrt2tfiw7sW"
 
     _stripe_initialized = True
 
@@ -118,12 +119,16 @@ def _get_stripe_connect_client_id() -> str:
     if mode == Mode.PROD:
         return db.secrets.get("STRIPE_CONNECT_CLIENT_ID_LIVE")
     else:
-        return db.secrets.get("STRIPE_CONNECT_CLIENT_ID_TEST")
+        # Try environment variable first (for local dev), then fall back to databutton secrets
+        return os.environ.get("STRIPE_CONNECT_CLIENT_ID_TEST") or db.secrets.get("STRIPE_CONNECT_CLIENT_ID_TEST")
 
 
 def _get_backend_base_url() -> str:
     """Get the backend base URL for OAuth redirect URI"""
-    return "https://happyclientflow-backend123.onrender.com"
+    if mode == Mode.PROD:
+        return "https://happyclientflow-backend123.onrender.com"
+    else:
+        return "http://localhost:8000"
 
 
 def _get_frontend_base_url() -> str:
@@ -131,7 +136,7 @@ def _get_frontend_base_url() -> str:
     if mode == Mode.PROD:
         return "https://app.happyclientflow.de"
     else:
-        return "https://app.happyclientflow.de"
+        return "http://localhost:5173"
 
 
 @router.post("/create-account-link", response_model=CreateAccountLinkResponse)
@@ -601,16 +606,19 @@ async def owner_oauth_callback(request: Request):
         except Exception as decode_err:
             print(f"[StripeConnect] Error decoding state: {decode_err}")
 
+    # Determine query string separator based on whether return_path already has query params
+    separator = "&" if "?" in return_path else "?"
+
     if error:
         print(f"[StripeConnect] Owner OAuth error: {error} - {error_description}")
         error_msg = urllib.parse.quote(error_description or error)
         return RedirectResponse(
-            url=f"{frontend_base}{return_path}?stripe_connect_error={error_msg}"
+            url=f"{frontend_base}{return_path}{separator}stripe_connect_error={error_msg}"
         )
 
     if not code or not company_id:
         return RedirectResponse(
-            url=f"{frontend_base}{return_path}?stripe_connect_error=missing_params"
+            url=f"{frontend_base}{return_path}{separator}stripe_connect_error=missing_params"
         )
 
     try:
@@ -621,7 +629,7 @@ async def owner_oauth_callback(request: Request):
         if not connected_account_id:
             print("[StripeConnect] No stripe_user_id in token response")
             return RedirectResponse(
-                url=f"{frontend_base}{return_path}?stripe_connect_error=no_account_id"
+                url=f"{frontend_base}{return_path}{separator}stripe_connect_error=no_account_id"
             )
 
         print(f"[StripeConnect] Owner OAuth success - account: {connected_account_id}, company: {company_id}")
@@ -634,20 +642,20 @@ async def owner_oauth_callback(request: Request):
         }).eq('id', company_id).execute()
 
         return RedirectResponse(
-            url=f"{frontend_base}{return_path}?stripe_connected=true"
+            url=f"{frontend_base}{return_path}{separator}stripe_connected=true"
         )
 
     except stripe._error.StripeError as e:
         print(f"[StripeConnect] Owner OAuth token exchange error: {str(e)}")
         error_msg = urllib.parse.quote(str(e))
         return RedirectResponse(
-            url=f"{frontend_base}{return_path}?stripe_connect_error={error_msg}"
+            url=f"{frontend_base}{return_path}{separator}stripe_connect_error={error_msg}"
         )
     except Exception as e:
         print(f"[StripeConnect] Owner OAuth internal error: {str(e)}")
         error_msg = urllib.parse.quote(str(e))
         return RedirectResponse(
-            url=f"{frontend_base}{return_path}?stripe_connect_error={error_msg}"
+            url=f"{frontend_base}{return_path}{separator}stripe_connect_error={error_msg}"
         )
 
 

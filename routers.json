@@ -154,6 +154,11 @@
       "name": "stripe_connect",
       "version": "2026-01-23T00:00:00",
       "disableAuth": true
+    },
+    "payouts": {
+      "name": "payouts",
+      "version": "2026-01-30T00:00:00",
+      "disableAuth": true
     }
   }
 }
