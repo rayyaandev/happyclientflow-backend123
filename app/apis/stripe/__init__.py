@@ -41,15 +41,10 @@ def _secret_debug_info(value: Optional[str]) -> str:
     prefix = "whsec_" if v.startswith("whsec_") else ("sk_live_" if v.startswith("sk_live_") else ("sk_test_" if v.startswith("sk_test_") else "set"))
     return f"{prefix} (len={len(v)})"
 
-# Environment-based Stripe configuration
-if mode == Mode.PROD:
-    # Production: Use live Stripe keys
-    stripe.api_key = db.secrets.get("STRIPE_SECRET_KEY_LIVE")
-    STRIPE_WEBHOOK_SECRET = db.secrets.get("STRIPE_WEBHOOK_SECRET_LIVE")
-else:
-    # Development: Use test/sandbox Stripe keys (env var takes priority)
-    stripe.api_key = os.environ.get("STRIPE_SECRET_KEY_TEST") or db.secrets.get("STRIPE_SECRET_KEY_TEST")
-    STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET_TEST") or db.secrets.get("STRIPE_WEBHOOK_SECRET_TEST")
+# Use environment variables for Stripe credentials
+# Set STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET in your environment
+stripe.api_key = os.environ.get("STRIPE_SECRET_KEY")
+STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET")
 
 # Startup debug (safe)
 print("[STRIPE] Startup config")

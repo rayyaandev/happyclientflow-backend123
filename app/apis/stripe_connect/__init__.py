@@ -37,20 +37,10 @@ def _init_stripe():
     if _stripe_initialized:
         return
 
-    # Environment-based Stripe configuration
-    if mode == Mode.PROD:
-        # Production: Use live Stripe keys
-        stripe.api_key = db.secrets.get("STRIPE_SECRET_KEY_LIVE")
-        # Webhook secret is optional - only needed for webhook endpoint
-        try:
-            _stripe_connect_webhook_secret = db.secrets.get("STRIPE_CONNECT_WEBHOOK_SECRET_LIVE")
-        except Exception:
-            _stripe_connect_webhook_secret = None
-            print("[StripeConnect] Warning: STRIPE_CONNECT_WEBHOOK_SECRET_LIVE not configured - webhooks will fail")
-    else:
-        # Development: Use test/sandbox Stripe keys (env var first, then databutton)
-        stripe.api_key = os.environ.get("STRIPE_SECRET_KEY_TEST") or db.secrets.get("STRIPE_SECRET_KEY_TEST")
-        _stripe_connect_webhook_secret = os.environ.get("STRIPE_CONNECT_WEBHOOK_SECRET_TEST") or "whsec_lARJBdIPYYfhjHJ2xzzQJqrt2tfiw7sW"
+    # Use environment variables for Stripe credentials
+    # Set STRIPE_SECRET_KEY and STRIPE_CONNECT_WEBHOOK_SECRET in your environment
+    stripe.api_key = os.environ.get("STRIPE_SECRET_KEY")
+    _stripe_connect_webhook_secret = os.environ.get("STRIPE_CONNECT_WEBHOOK_SECRET")
 
     _stripe_initialized = True
 
@@ -120,12 +110,8 @@ class CreateConnectedCustomerResponse(BaseModel):
 
 
 def _get_stripe_connect_client_id() -> str:
-    """Get the Stripe Connect Client ID based on environment"""
-    if mode == Mode.PROD:
-        return db.secrets.get("STRIPE_CONNECT_CLIENT_ID_LIVE")
-    else:
-        # Try environment variable first (for local dev), then fall back to databutton secrets
-        return os.environ.get("STRIPE_CONNECT_CLIENT_ID_TEST") or db.secrets.get("STRIPE_CONNECT_CLIENT_ID_TEST")
+    """Get the Stripe Connect Client ID from environment variable"""
+    return os.environ.get("STRIPE_CONNECT_CLIENT_ID", "")
 
 
 def _get_backend_base_url() -> str:
