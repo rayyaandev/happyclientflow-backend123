@@ -12,6 +12,7 @@ This API handles Stripe subscription management for Happy Client Flow:
 Used by: Frontend subscription components, Stripe webhooks
 """
 
+import os
 from datetime import datetime, timezone
 from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, HTTPException, Request, Header, Depends
@@ -46,9 +47,9 @@ if mode == Mode.PROD:
     stripe.api_key = db.secrets.get("STRIPE_SECRET_KEY_LIVE")
     STRIPE_WEBHOOK_SECRET = db.secrets.get("STRIPE_WEBHOOK_SECRET_LIVE")
 else:
-    # Development: Use test/sandbox Stripe keys
-    stripe.api_key = db.secrets.get("STRIPE_SECRET_KEY_TEST")
-    STRIPE_WEBHOOK_SECRET = db.secrets.get("STRIPE_WEBHOOK_SECRET_TEST")
+    # Development: Use test/sandbox Stripe keys (env var takes priority)
+    stripe.api_key = os.environ.get("STRIPE_SECRET_KEY_TEST") or db.secrets.get("STRIPE_SECRET_KEY_TEST")
+    STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET_TEST") or db.secrets.get("STRIPE_WEBHOOK_SECRET_TEST")
 
 # Startup debug (safe)
 print("[STRIPE] Startup config")

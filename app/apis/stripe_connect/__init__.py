@@ -41,7 +41,12 @@ def _init_stripe():
     if mode == Mode.PROD:
         # Production: Use live Stripe keys
         stripe.api_key = db.secrets.get("STRIPE_SECRET_KEY_LIVE")
-        _stripe_connect_webhook_secret = db.secrets.get("STRIPE_CONNECT_WEBHOOK_SECRET_LIVE")
+        # Webhook secret is optional - only needed for webhook endpoint
+        try:
+            _stripe_connect_webhook_secret = db.secrets.get("STRIPE_CONNECT_WEBHOOK_SECRET_LIVE")
+        except Exception:
+            _stripe_connect_webhook_secret = None
+            print("[StripeConnect] Warning: STRIPE_CONNECT_WEBHOOK_SECRET_LIVE not configured - webhooks will fail")
     else:
         # Development: Use test/sandbox Stripe keys (env var first, then databutton)
         stripe.api_key = os.environ.get("STRIPE_SECRET_KEY_TEST") or db.secrets.get("STRIPE_SECRET_KEY_TEST")
@@ -416,6 +421,9 @@ async def stripe_connect_webhook(request: Request, stripe_signature: str = Heade
 
     if not stripe.api_key:
         raise HTTPException(status_code=500, detail="Stripe not configured")
+
+    if not _stripe_connect_webhook_secret:
+        raise HTTPException(status_code=500, detail="Stripe Connect webhook secret not configured")
 
     body = await request.body()
 
