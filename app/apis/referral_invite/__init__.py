@@ -112,7 +112,8 @@ The {payload.company_name} Team"""
         raise HTTPException(status_code=500, detail="Failed to fetch referral invite template.")
 
     # 4. Generate the referral signup link
-    base_url = "https://happyclientflow-frontend-git-feat-l-4eb1b3-rayyaandevs-projects.vercel.app"
+    import os
+    base_url = os.environ.get("FRONTEND_URL", "https://app.happyclientflow.de")
     referral_link = f"{base_url}/referral-signup?customer={payload.client_id}"
 
     # 5. Interpolate variables into the email body and subject
