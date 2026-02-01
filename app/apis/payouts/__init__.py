@@ -6,6 +6,7 @@ This API handles payout operations for the referral program:
 - Process Stripe Connect transfers for instant payouts
 - Create pending records for PayPal/Bank (manual processing)
 - Track payout status
+- Send email notifications to referrers
 
 Used by: Frontend Lead Management page
 """
@@ -18,6 +19,8 @@ from pydantic import BaseModel
 import stripe
 import databutton as db
 from supabase import create_client, Client
+from sendgrid import SendGridAPIClient
+from sendgrid.helpers.mail import Mail, From
 from app.env import Mode, mode
 
 router = APIRouter(prefix="/payouts")
@@ -49,6 +52,101 @@ def _get_supabase() -> Client:
         supabase_service_key = db.secrets.get("SUPABASE_SERVICE_KEY")
         _supabase_client = create_client(supabase_url, supabase_service_key)
     return _supabase_client
+
+
+def _send_payout_notification_email(
+    referrer_email: str,
+    referrer_name: str,
+    amount: float,
+    currency: str,
+    payout_method: str,
+    company_name: str,
+    status: str,
+) -> bool:
+    """
+    Send an email notification to the referrer about their payout.
+
+    Args:
+        referrer_email: Email address of the referrer
+        referrer_name: Name of the referrer
+        amount: Payout amount
+        currency: Currency code (e.g., 'EUR')
+        payout_method: Payment method used (stripe_connect, paypal, bank)
+        company_name: Name of the company
+        status: Payout status (completed, pending, processing)
+
+    Returns:
+        True if email sent successfully, False otherwise
+    """
+    try:
+        sendgrid_api_key = db.secrets.get("SENDGRID_API_KEY")
+        if not sendgrid_api_key:
+            print("[Payouts] SendGrid API key not configured, skipping email")
+            return False
+
+        # Format payout method for display
+        method_display = {
+            'stripe_connect': 'Stripe (Direct Deposit)',
+            'paypal': 'PayPal',
+            'bank': 'Bank Transfer',
+        }.get(payout_method, payout_method)
+
+        # Format status message
+        if status == 'completed':
+            status_message = f"Your payout of <strong>{amount:.2f} {currency}</strong> has been successfully transferred to your {method_display} account."
+            subject = f"🎉 Payout Received - {amount:.2f} {currency} from {company_name}"
+        elif status == 'processing':
+            status_message = f"Your payout of <strong>{amount:.2f} {currency}</strong> is being processed and will be transferred to your {method_display} account shortly."
+            subject = f"💰 Payout Processing - {amount:.2f} {currency} from {company_name}"
+        else:  # pending
+            status_message = f"Your payout of <strong>{amount:.2f} {currency}</strong> has been queued and will be sent to your {method_display} account soon."
+            subject = f"💰 Payout Pending - {amount:.2f} {currency} from {company_name}"
+
+        # Get first name for personalization
+        first_name = referrer_name.split()[0] if referrer_name else "there"
+
+        body = f"""
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+            <h2 style="color: #2563eb;">Congratulations, {first_name}! 🎉</h2>
+
+            <p>Great news! Your referral has converted into a customer.</p>
+
+            <div style="background-color: #f0fdf4; border: 1px solid #86efac; border-radius: 8px; padding: 20px; margin: 20px 0;">
+                <p style="margin: 0; font-size: 18px;">{status_message}</p>
+            </div>
+
+            <p><strong>Payout Details:</strong></p>
+            <ul style="list-style: none; padding: 0;">
+                <li>💵 Amount: <strong>{amount:.2f} {currency}</strong></li>
+                <li>💳 Method: {method_display}</li>
+                <li>📊 Status: {status.capitalize()}</li>
+            </ul>
+
+            <p>Thank you for being a valued referrer! Keep sharing and earning.</p>
+
+            <p style="color: #6b7280; font-size: 14px; margin-top: 30px;">
+                Best regards,<br>
+                The {company_name} Team
+            </p>
+        </div>
+        """
+
+        message = Mail(
+            from_email=From("noreply@happyclientflow.de", "Happy Client Flow"),
+            to_emails=referrer_email,
+            subject=subject,
+            html_content=body,
+        )
+
+        sg = SendGridAPIClient(sendgrid_api_key)
+        response = sg.send(message)
+
+        print(f"[Payouts] Payout notification email sent to {referrer_email}, status: {response.status_code}")
+        return response.status_code in [200, 201, 202]
+
+    except Exception as e:
+        print(f"[Payouts] Failed to send payout notification email: {str(e)}")
+        return False
 
 
 # Pydantic Models
@@ -176,7 +274,7 @@ async def trigger_payout(request: TriggerPayoutRequest):
         # 4. Get company commission settings
         print(f"[Payouts] Looking up company: {request.company_id}")
         company_response = supabase.table('companies')\
-            .select('id, commission_amount, commission_currency')\
+            .select('id, name, commission_amount, commission_currency')\
             .eq('id', request.company_id)\
             .limit(1)\
             .execute()
@@ -190,8 +288,26 @@ async def trigger_payout(request: TriggerPayoutRequest):
             )
 
         company = company_response.data[0]
+        company_name = company.get('name', 'Your Partner Company')
         commission_amount = company.get('commission_amount')
         commission_currency = company.get('commission_currency') or 'EUR'
+
+        # 4b. Get referrer's email and name from clients table
+        referrer_client_response = supabase.table('clients')\
+            .select('email, first_name, last_name')\
+            .eq('id', referred_by)\
+            .limit(1)\
+            .execute()
+
+        referrer_email = None
+        referrer_name = "Referrer"
+        if referrer_client_response.data and len(referrer_client_response.data) > 0:
+            referrer_client = referrer_client_response.data[0]
+            referrer_email = referrer_client.get('email')
+            first_name = referrer_client.get('first_name', '')
+            last_name = referrer_client.get('last_name', '')
+            referrer_name = f"{first_name} {last_name}".strip() or "Referrer"
+            print(f"[Payouts] Referrer email: {referrer_email}, name: {referrer_name}")
 
         print(f"[Payouts] Commission: {commission_amount} {commission_currency}")
 
@@ -320,6 +436,20 @@ async def trigger_payout(request: TriggerPayoutRequest):
         supabase.table('referrers').update({
             'total_comission_earned': referrer.get('total_comission_earned', 0) + commission_amount,
         }).eq('id', referrer['id']).execute()
+
+        # 9. Send payout notification email to referrer
+        if referrer_email:
+            _send_payout_notification_email(
+                referrer_email=referrer_email,
+                referrer_name=referrer_name,
+                amount=commission_amount,
+                currency=commission_currency,
+                payout_method=payout_method,
+                company_name=company_name,
+                status=final_status,
+            )
+        else:
+            print(f"[Payouts] No email found for referrer, skipping notification")
 
         print(f"[Payouts] Payout triggered successfully: {payout_id} with status {final_status}")
 
