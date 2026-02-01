@@ -70,6 +70,10 @@ def get_supabase_client() -> Client:
 # --- Helper Functions ---
 def _get_base_url() -> str:
     """Get the frontend base URL for invitation links."""
+    import os
+    frontend_url = os.environ.get("FRONTEND_URL")
+    if frontend_url:
+        return frontend_url.rstrip('/') + '/'
     return "https://app.happyclientflow.de/"
 
 def _send_actual_invitation_email(email_to: EmailStr, role: str, token: str, company_name: Optional[str], language: str):

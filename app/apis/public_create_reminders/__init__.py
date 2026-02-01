@@ -93,7 +93,8 @@ def create_reminders_if_not_exists(
 
         # --- Prepare reminder data ---
         reminders_to_insert = []
-        base_url = "https://app.happyclientflow.de" # Or from config
+        import os
+        base_url = os.environ.get("FRONTEND_URL", "https://app.happyclientflow.de")
         review_link = f"{base_url}/feedback?client_id={client['id']}&company_name={company['name'].replace(' ', '%20')}"
 
         for template in templates:

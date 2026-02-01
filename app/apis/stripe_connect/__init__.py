@@ -124,6 +124,10 @@ def _get_backend_base_url() -> str:
 
 def _get_frontend_base_url() -> str:
     """Get the frontend base URL for redirects after OAuth"""
+    # Use environment variable if set, otherwise fall back to defaults
+    frontend_url = os.environ.get("FRONTEND_URL")
+    if frontend_url:
+        return frontend_url
     if mode == Mode.PROD:
         return "https://app.happyclientflow.de"
     else:
