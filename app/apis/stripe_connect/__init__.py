@@ -48,8 +48,8 @@ def _init_stripe():
     if _stripe_initialized:
         return
 
-    stripe.api_key = _get_secret("STRIPE_SECRET_KEY")
-    _stripe_connect_webhook_secret = _get_secret("STRIPE_CONNECT_WEBHOOK_SECRET")
+    stripe.api_key = _get_secret("STRIPE_SECRET_KEY_TEST")
+    _stripe_connect_webhook_secret = _get_secret("STRIPE_CONNECT_WEBHOOK_SECRET_TEST")
 
     _stripe_initialized = True
 
@@ -121,8 +121,8 @@ class CreateConnectedCustomerResponse(BaseModel):
 
 
 def _get_stripe_connect_client_id() -> str:
-    """Get the Stripe Connect Client ID from environment variable"""
-    return os.environ.get("STRIPE_CONNECT_CLIENT_ID", "")
+    """Get the Stripe Connect Client ID from env var or databutton"""
+    return _get_secret("STRIPE_CONNECT_CLIENT_ID_TEST") or ""
 
 
 def _get_backend_base_url() -> str:
