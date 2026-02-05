@@ -43,6 +43,7 @@ class SendInvitationEmailRequest(BaseModel):
     token: str
     companyName: Optional[str] = "Your Company"
     language: Optional[str] = "en"
+    frontendUrl: Optional[str] = None  # Allow frontend to pass current URL for dynamic environments
 
 class ValidateInviteRequest(BaseModel):
     token: str
@@ -76,7 +77,7 @@ def _get_base_url() -> str:
         return frontend_url.rstrip('/') + '/'
     return "https://app.happyclientflow.de/"
 
-def _send_actual_invitation_email(email_to: EmailStr, role: str, token: str, company_name: Optional[str], language: str):
+def _send_actual_invitation_email(email_to: EmailStr, role: str, token: str, company_name: Optional[str], language: str, frontend_url: Optional[str] = None):
     sendgrid_api_key = db.secrets.get("SENDGRID_API_KEY")
     sendgrid_from_email = "noreply@happyclientflow.de"
 
@@ -84,7 +85,8 @@ def _send_actual_invitation_email(email_to: EmailStr, role: str, token: str, com
         print("ERROR: SendGrid API key not configured. Cannot send email.")
         return False
 
-    app_base_url = _get_base_url()
+    # Use provided frontend URL or fall back to default
+    app_base_url = frontend_url.rstrip('/') + '/' if frontend_url else _get_base_url()
     # Ensure no double slashes if REGISTER_PATH might start with one or app_base_url ends with one
     registration_link = f"{app_base_url.rstrip('/')}/{REGISTER_PATH.lstrip('/')}?token={token}"
     
@@ -160,7 +162,8 @@ async def send_invitation_email_via_api(
         role=payload.role,
         token=payload.token,
         company_name=payload.companyName,
-        language=payload.language
+        language=payload.language,
+        frontend_url=payload.frontendUrl
     )
     if not email_sent:
         # The invite exists in DB, but email failed. Frontend should be aware.
