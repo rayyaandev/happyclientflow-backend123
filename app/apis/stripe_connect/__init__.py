@@ -31,16 +31,25 @@ _stripe_initialized = False
 _supabase_client: Optional[Client] = None
 _stripe_connect_webhook_secret: Optional[str] = None
 
+def _get_secret(key: str) -> Optional[str]:
+    """Get secret from env var first, then fallback to databutton"""
+    value = os.environ.get(key)
+    if value:
+        return value
+    try:
+        return db.secrets.get(key)
+    except Exception as e:
+        print(f"[StripeConnect] Warning: Failed to get secret {key}: {e}")
+        return None
+
 def _init_stripe():
     """Lazy initialization of Stripe and secrets"""
     global _stripe_initialized, _stripe_connect_webhook_secret
     if _stripe_initialized:
         return
 
-    # Use environment variables for Stripe credentials
-    # Set STRIPE_SECRET_KEY and STRIPE_CONNECT_WEBHOOK_SECRET in your environment
-    stripe.api_key = os.environ.get("STRIPE_SECRET_KEY")
-    _stripe_connect_webhook_secret = os.environ.get("STRIPE_CONNECT_WEBHOOK_SECRET")
+    stripe.api_key = _get_secret("STRIPE_SECRET_KEY")
+    _stripe_connect_webhook_secret = _get_secret("STRIPE_CONNECT_WEBHOOK_SECRET")
 
     _stripe_initialized = True
 
@@ -48,8 +57,10 @@ def _get_supabase() -> Client:
     """Lazy initialization of Supabase client"""
     global _supabase_client
     if _supabase_client is None:
-        supabase_url = db.secrets.get("SUPABASE_URL")
-        supabase_service_key = db.secrets.get("SUPABASE_SERVICE_KEY")
+        supabase_url = _get_secret("SUPABASE_URL")
+        supabase_service_key = _get_secret("SUPABASE_SERVICE_KEY")
+        if not supabase_url or not supabase_service_key:
+            raise HTTPException(status_code=500, detail="Supabase configuration missing")
         _supabase_client = create_client(supabase_url, supabase_service_key)
     return _supabase_client
 

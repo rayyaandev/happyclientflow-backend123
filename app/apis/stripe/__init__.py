@@ -41,20 +41,30 @@ def _secret_debug_info(value: Optional[str]) -> str:
     prefix = "whsec_" if v.startswith("whsec_") else ("sk_live_" if v.startswith("sk_live_") else ("sk_test_" if v.startswith("sk_test_") else "set"))
     return f"{prefix} (len={len(v)})"
 
-# Use environment variables for Stripe credentials
-# Set STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET in your environment
-stripe.api_key = os.environ.get("STRIPE_SECRET_KEY")
-STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET")
+def _get_secret(key: str) -> Optional[str]:
+    """Get secret from env var first, then fallback to databutton"""
+    value = os.environ.get(key)
+    if value:
+        return value
+    try:
+        return db.secrets.get(key)
+    except Exception as e:
+        print(f"[STRIPE] Warning: Failed to get secret {key}: {e}")
+        return None
+
+# Initialize Stripe with fallback to databutton secrets
+stripe.api_key = _get_secret("STRIPE_SECRET_KEY")
+STRIPE_WEBHOOK_SECRET = _get_secret("STRIPE_WEBHOOK_SECRET")
 
 # Startup debug (safe)
 print("[STRIPE] Startup config")
 print(f"[STRIPE] DATABUTTON_SERVICE_TYPE={os.environ.get('DATABUTTON_SERVICE_TYPE')!r} -> mode={mode}")
-print(f"[STRIPE] stripe.api_key: {stripe.api_key}")
-print(f"[STRIPE] STRIPE_WEBHOOK_SECRET: {STRIPE_WEBHOOK_SECRET}")
+print(f"[STRIPE] stripe.api_key: {_secret_debug_info(stripe.api_key)}")
+print(f"[STRIPE] STRIPE_WEBHOOK_SECRET: {_secret_debug_info(STRIPE_WEBHOOK_SECRET)}")
 
 # Initialize Supabase
-supabase_url = db.secrets.get("SUPABASE_URL")
-supabase_service_key = db.secrets.get("SUPABASE_SERVICE_KEY")
+supabase_url = _get_secret("SUPABASE_URL")
+supabase_service_key = _get_secret("SUPABASE_SERVICE_KEY")
 supabase: Client = create_client(supabase_url, supabase_service_key)
 
 # Hardcoded price ID for Happy Client Flow Pro - replace with actual price ID
