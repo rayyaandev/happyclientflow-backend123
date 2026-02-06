@@ -127,10 +127,9 @@ def _get_stripe_connect_client_id() -> str:
 
 def _get_backend_base_url() -> str:
     """Get the backend base URL for OAuth redirect URI"""
-    if mode == Mode.PROD:
-        return "https://happyclientflow-backend123-1.onrender.com"
-    else:
-        return "http://localhost:8000"
+    backend_url = os.environ.get("BACKEND_URL", "https://happyclientflow-backend123-1.onrender.com")
+    print(f"[StripeConnect] _get_backend_base_url: BACKEND_URL = '{backend_url}'")
+    return backend_url.rstrip('/')
 
 
 def _get_frontend_base_url() -> str:
