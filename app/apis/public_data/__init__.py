@@ -9,7 +9,7 @@ established in other parts of the application to ensure stable database connecti
 """
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
-from typing import List, Dict
+from typing import List, Dict, Optional
 import os
 from supabase import Client, create_client
 import databutton as db
@@ -52,9 +52,9 @@ class Profile(BaseModel):
 class Company(BaseModel):
     id: str
     name: str
-    logo_url: str
-    donation_text: str
-    is_donation_message_displayed: bool
+    logo_url: Optional[str] = None
+    donation_text: Optional[str] = None
+    is_donation_message_displayed: bool = False
 
 class CompanyInfoResponse(BaseModel):
     products: List[Product]
