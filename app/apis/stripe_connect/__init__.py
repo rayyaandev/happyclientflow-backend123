@@ -135,14 +135,9 @@ def _get_backend_base_url() -> str:
 
 def _get_frontend_base_url() -> str:
     """Get the frontend base URL for redirects after OAuth"""
-    # Use environment variable if set, otherwise fall back to defaults
-    frontend_url = os.environ.get("FRONTEND_URL")
-    if frontend_url:
-        return frontend_url
-    if mode == Mode.PROD:
-        return "https://app.happyclientflow.de"
-    else:
-        return "http://localhost:5173"
+    frontend_url = os.environ.get("FRONTEND_URL", "https://app.happyclientflow.de")
+    print(f"[StripeConnect] _get_frontend_base_url: FRONTEND_URL = '{frontend_url}'")
+    return frontend_url.rstrip('/')
 
 
 @router.post("/create-account-link", response_model=CreateAccountLinkResponse)
