@@ -232,13 +232,25 @@ async def create_portal_session(request: PortalRequest, current_user: str = Depe
             raise HTTPException(status_code=404, detail="No subscription found for this company")
         
         customer_id = sub_response.data[0]['stripe_customer_id']
-        
-        # Create portal session
+
+        print(f"[PORTAL] Customer ID: {customer_id}")
+        print(f"[PORTAL] Using Stripe key prefix: {stripe.api_key[:12]}...")
+
+        # List portal configurations to debug
+        configs = stripe.billing_portal.Configuration.list(limit=5)
+        for cfg in configs.data:
+            print(f"[PORTAL] Config id={cfg.id}, is_default={cfg.is_default}, active={cfg.active}, features.subscription_update.enabled={cfg.features.subscription_update.enabled if hasattr(cfg.features, 'subscription_update') else 'N/A'}")
+
+        # Create portal session with explicit configuration
         session = stripe.billing_portal.Session.create(
             customer=customer_id,
-            return_url=request.return_url
+            return_url=request.return_url,
+            configuration="bpc_1Sxkx3FSVJlbi6y6Dl8ELUGT",
         )
-        
+
+        print(f"[PORTAL] Session URL: {session.url}")
+        print(f"[PORTAL] Session config: {session.configuration}")
+
         return PortalResponse(portal_url=session.url)
         
     except stripe.StripeError as e:
@@ -372,12 +384,18 @@ async def update_seats(request: UpdateSeatsRequest, user_data: str = Depends(req
         # Find existing line items
         base_item = None
         seat_item = None
+        print(f"[UPDATE-SEATS] Subscription items count: {len(stripe_sub['items']['data'])}")
         for item in stripe_sub['items']['data']:
-            lookup_key = item.get('price', {}).get('lookup_key', '') or ''
+            price_obj = item.get('price', {})
+            lookup_key = price_obj.get('lookup_key', '') or ''
+            print(f"[UPDATE-SEATS] Item id={item['id']}, price_id={price_obj.get('id')}, lookup_key={lookup_key!r}, qty={item.get('quantity')}")
             if resolve_plan_from_lookup_key(lookup_key):
                 base_item = item
             elif is_extra_seat_lookup_key(lookup_key):
                 seat_item = item
+
+        print(f"[UPDATE-SEATS] base_item={'found' if base_item else 'NOT FOUND'}, seat_item={'found' if seat_item else 'NOT FOUND'}")
+        print(f"[UPDATE-SEATS] Requested new_extra_seats={request.new_extra_seats}, billing_cycle={billing_cycle}")
 
         items_update = []
 
@@ -385,8 +403,9 @@ async def update_seats(request: UpdateSeatsRequest, user_data: str = Depends(req
             # Resolve extra seat price
             seat_lookup_key = get_extra_seat_lookup_key(billing_cycle)
             seat_prices = stripe.Price.list(lookup_keys=[seat_lookup_key], active=True)
+            print(f"[UPDATE-SEATS] Looking for seat price with lookup_key={seat_lookup_key!r}, found={len(seat_prices.data)} prices")
             if not seat_prices.data:
-                raise HTTPException(status_code=500, detail=f"Extra seat price not found for {seat_lookup_key}")
+                raise HTTPException(status_code=500, detail=f"Extra seat price not found for lookup_key '{seat_lookup_key}'. Make sure you've created a price with this lookup key in your Stripe dashboard.")
 
             if seat_item:
                 # Update existing seat line item quantity
@@ -407,8 +426,10 @@ async def update_seats(request: UpdateSeatsRequest, user_data: str = Depends(req
                 'deleted': True,
             })
 
+        print(f"[UPDATE-SEATS] items_update={items_update}")
+
         if items_update:
-            stripe.Subscription.modify(
+            modified_sub = stripe.Subscription.modify(
                 sub['stripe_subscription_id'],
                 items=items_update,
                 proration_behavior='create_prorations',
@@ -419,6 +440,15 @@ async def update_seats(request: UpdateSeatsRequest, user_data: str = Depends(req
                     'extra_seats': str(request.new_extra_seats),
                 }
             )
+            print(f"[UPDATE-SEATS] Stripe subscription modified successfully. Status: {modified_sub.get('status')}")
+
+            # Update Supabase immediately so frontend gets fresh data without waiting for webhook
+            supabase.table('subscriptions').update({
+                'extra_seats': request.new_extra_seats,
+                'max_users': new_max,
+            }).eq('id', sub['id']).execute()
+        else:
+            print(f"[UPDATE-SEATS] WARNING: items_update is empty, no Stripe modification made!")
 
         return {"status": "success", "new_extra_seats": request.new_extra_seats, "new_max_users": new_max}
 
@@ -516,6 +546,13 @@ async def change_plan(request: ChangePlanRequest, user_data: str = Depends(requi
                 'extra_seats': str(extra_seats),
             }
         )
+
+        # Update Supabase immediately so frontend gets fresh data without waiting for webhook
+        supabase.table('subscriptions').update({
+            'plan_type': request.new_plan_type,
+            'included_users': new_included,
+            'max_users': new_max,
+        }).eq('id', sub['id']).execute()
 
         return {
             "status": "success",
