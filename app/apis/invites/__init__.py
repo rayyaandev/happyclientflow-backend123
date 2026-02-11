@@ -13,6 +13,7 @@ from app.env import mode, Mode # Import current environment mode
 from supabase import create_client, Client
 from app.libs.auth import get_user_from_request # Assuming this handles user auth
 from app.libs.auth_utils import require_admin  # Role-based access control
+from app.libs.user_limits import check_user_limit, enforce_user_limit
 
 # Path for the registration page, ensure it matches frontend routing
 REGISTER_PATH = "register" # e.g., app.com/register?token=xyz
@@ -57,6 +58,21 @@ class ValidateInviteResponse(BaseModel):
 
 class ResponseMessage(BaseModel):
     message: str
+
+class CreateAndSendInviteRequest(BaseModel):
+    email: EmailStr
+    role: str = Field(default="ADMIN")
+    language: Optional[str] = "en"
+    frontendUrl: Optional[str] = None
+
+class UserLimitStatus(BaseModel):
+    allowed: bool
+    max_users: int
+    current_users: int
+    plan_type: Optional[str] = None
+    included_users: int = 0
+    extra_seats: int = 0
+    reason: Optional[str] = None
 
 # --- Supabase Integration ---
 def get_supabase_client() -> Client:
@@ -172,14 +188,106 @@ async def send_invitation_email_via_api(
     return ResponseMessage(message="Invitation email dispatched successfully.")
 
 
+@router.post("/create-and-send", response_model=InviteRead, name="create_and_send_invite")
+async def create_and_send_invite(
+    payload: CreateAndSendInviteRequest = Body(...),
+    current_user_id: str = Depends(require_admin),
+):
+    """
+    Create an invitation and send the email in a single atomic operation.
+    Enforces user limits based on the company's subscription plan.
+    Only admins can access this endpoint.
+    """
+    supabase = get_supabase_client()
+
+    # Get admin's company info
+    user_res = supabase.table("users").select("id, company_id").eq("id", current_user_id).maybe_single().execute()
+    if not user_res.data:
+        raise HTTPException(status_code=403, detail="Authenticated user not found.")
+    company_id = user_res.data.get("company_id")
+    if not company_id:
+        raise HTTPException(status_code=403, detail="Company ID not found for user.")
+
+    # Enforce user limit
+    await enforce_user_limit(company_id, supabase)
+
+    # Check for duplicate: existing pending invite for same email + company
+    existing_invite = supabase.table("invites").select("id").eq("email", payload.email).eq("company_id", company_id).eq("status", "Pending").maybe_single().execute()
+    if existing_invite and existing_invite.data:
+        raise HTTPException(status_code=400, detail="A pending invitation already exists for this email.")
+
+    # Check if user already exists in this company
+    existing_user = supabase.table("users").select("id").eq("email", payload.email).eq("company_id", company_id).maybe_single().execute()
+    if existing_user and existing_user.data:
+        raise HTTPException(status_code=400, detail="This user is already a member of your company.")
+
+    # Get company name for email
+    company_res = supabase.table("companies").select("name").eq("id", company_id).maybe_single().execute()
+    company_name = company_res.data.get("name", "Happy Client Flow") if company_res.data else "Happy Client Flow"
+
+    # Create invite token
+    token = str(uuid.uuid4())
+    now = datetime.datetime.now(datetime.timezone.utc)
+    expires_at = now + datetime.timedelta(days=14)
+
+    invite_data = {
+        "email": payload.email,
+        "role": payload.role,
+        "token": token,
+        "status": "Pending",
+        "company_id": company_id,
+        "invited_by_user_id": current_user_id,
+        "created_at": now.isoformat(),
+        "expires_at": expires_at.isoformat(),
+    }
+
+    # Insert invite into database
+    insert_result = supabase.table("invites").insert(invite_data).execute()
+    if not insert_result.data:
+        raise HTTPException(status_code=500, detail="Failed to create invitation.")
+
+    created_invite = insert_result.data[0]
+
+    # Send email
+    email_sent = _send_actual_invitation_email(
+        email_to=payload.email,
+        role=payload.role,
+        token=token,
+        company_name=company_name,
+        language=payload.language or "en",
+        frontend_url=payload.frontendUrl,
+    )
+
+    if not email_sent:
+        print(f"Warning: Invite created but email failed to send for {payload.email}")
+
+    return InviteRead(**created_invite)
+
+
+@router.get("/user-limit-status", response_model=UserLimitStatus, name="get_user_limit_status")
+async def get_user_limit_status(current_user: str = Depends(get_user_from_request)):
+    """
+    Get the current user limit status for the authenticated user's company.
+    Returns how many seats are used, how many are available, and the plan details.
+    """
+    supabase = get_supabase_client()
+    user_result = supabase.table("users").select("company_id").eq("id", current_user).maybe_single().execute()
+    company_id = user_result.data.get("company_id") if user_result.data else None
+    if not company_id:
+        raise HTTPException(status_code=403, detail="Company ID not found for user.")
+
+    result = await check_user_limit(company_id, supabase)
+    return UserLimitStatus(**result)
+
 
 @router.get("", response_model=List[InviteRead], name="get_all_invites_for_company")
-async def get_all_invites(current_user: dict = Depends(get_user_from_request)):
+async def get_all_invites(current_user: str = Depends(get_user_from_request)):
     """
     Get all invites for the authenticated user's company.
     """
     supabase = get_supabase_client()
-    company_id = current_user.get("company_id")
+    user_result = supabase.table("users").select("company_id").eq("id", current_user).maybe_single().execute()
+    company_id = user_result.data.get("company_id") if user_result.data else None
     if not company_id:
         raise HTTPException(status_code=403, detail="Company ID not found for user.")
     

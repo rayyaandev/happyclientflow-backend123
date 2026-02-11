@@ -23,6 +23,13 @@ import os
 import json
 from supabase import create_client, Client
 from app.libs.auth import require_auth
+from app.libs.pricing_config import (
+    resolve_plan_from_lookup_key,
+    is_extra_seat_lookup_key,
+    get_plan_lookup_key,
+    get_extra_seat_lookup_key,
+    PLANS,
+)
 from app.env import Mode, mode
 import asyncio
 
@@ -53,7 +60,7 @@ def _get_secret(key: str) -> Optional[str]:
         return None
 
 # Initialize Stripe with fallback to databutton secrets
-stripe.api_key = _get_secret("STRIPE_SECRET_KEY")
+stripe.api_key = _get_secret("STRIPE_SECRET_KEY_TEST")
 STRIPE_WEBHOOK_SECRET = _get_secret("STRIPE_WEBHOOK_SECRET")
 
 # Startup debug (safe)
@@ -67,14 +74,14 @@ supabase_url = _get_secret("SUPABASE_URL")
 supabase_service_key = _get_secret("SUPABASE_SERVICE_KEY")
 supabase: Client = create_client(supabase_url, supabase_service_key)
 
-# Hardcoded price ID for Happy Client Flow Pro - replace with actual price ID
-STRIPE_PRICE_ID = "price_1234567890"  # Replace with actual Stripe Price ID
-
 # Pydantic Models
 class CheckoutRequest(BaseModel):
     company_id: str
     success_url: str
     cancel_url: str
+    plan_type: str  # "starter" or "business"
+    billing_cycle: str  # "monthly" or "annual"
+    extra_seats: int = 0  # additional seats beyond the plan's included users
 
 class CheckoutResponse(BaseModel):
     checkout_url: str
@@ -97,86 +104,112 @@ class SubscriptionStatus(BaseModel):
 @router.post("/create-checkout-session", response_model=CheckoutResponse)
 async def create_checkout_session(request: CheckoutRequest, user_data: str = Depends(require_auth)):
     """
-    Create a Stripe checkout session for subscribing to Happy Client Flow Pro
+    Create a Stripe checkout session for subscribing to a Happy Client Flow plan.
+    Supports Starter/Business plans with monthly/annual billing and extra seats.
     """
     if not stripe.api_key:
         raise HTTPException(status_code=500, detail="Stripe not configured")
+
+    # Validate plan parameters
+    if request.plan_type not in PLANS:
+        raise HTTPException(status_code=400, detail=f"Invalid plan_type: {request.plan_type}. Must be 'starter' or 'business'.")
+    if request.billing_cycle not in ('monthly', 'annual'):
+        raise HTTPException(status_code=400, detail=f"Invalid billing_cycle: {request.billing_cycle}. Must be 'monthly' or 'annual'.")
+    if request.extra_seats < 0:
+        raise HTTPException(status_code=400, detail="extra_seats cannot be negative.")
+
     try:
         # Get company info from database
         company_response = supabase.table('companies').select('*').eq('id', request.company_id).single().execute()
-        
+
         if not company_response.data:
             raise HTTPException(status_code=404, detail="Company not found")
-        
+
         company = company_response.data
-        
+
         # Check if company already has an active subscription
         existing_sub = supabase.table('subscriptions').select('*').eq('company_id', request.company_id).eq('status', 'active').execute()
-        
+
         if existing_sub.data:
             raise HTTPException(status_code=400, detail="Company already has an active subscription")
-        
+
         # Create or retrieve Stripe customer
         customer_email = company.get('contact_email', '')
         customer_name = company.get('name', '')
-        
-        # Check if company already has a Stripe customer
         existing_customer_id = company.get('stripe_customer_id')
-        
+
         if existing_customer_id:
-            # Use existing customer
             try:
                 customer = stripe.Customer.retrieve(existing_customer_id)
-            except stripe.error.InvalidRequestError:
-                # Customer doesn't exist in Stripe, create new one
+            except stripe.InvalidRequestError:
                 customer = stripe.Customer.create(
                     email=customer_email,
                     name=customer_name
                 )
-                # Update companies table with new customer ID
                 supabase.table('companies').update({
                     'stripe_customer_id': customer.id
                 }).eq('id', request.company_id).execute()
         else:
-            # Try to find existing customer by email
             customers = stripe.Customer.list(email=customer_email, limit=1)
-            
             if customers.data:
                 customer = customers.data[0]
             else:
-                # Create new customer
                 customer = stripe.Customer.create(
                     email=customer_email,
                     name=customer_name
                 )
-            
-            # Update companies table with customer ID
             supabase.table('companies').update({
                 'stripe_customer_id': customer.id
             }).eq('id', request.company_id).execute()
-        
-        # Create checkout session
+
+        # Resolve Stripe price IDs via lookup_keys
+        plan_lookup_key = get_plan_lookup_key(request.plan_type, request.billing_cycle)
+        base_prices = stripe.Price.list(lookup_keys=[plan_lookup_key], active=True)
+        if not base_prices.data:
+            raise HTTPException(status_code=500, detail=f"Stripe price not found for lookup_key: {plan_lookup_key}")
+
+        line_items = [{'price': base_prices.data[0].id, 'quantity': 1}]
+
+        # Add extra seat line item if needed
+        if request.extra_seats > 0:
+            seat_lookup_key = get_extra_seat_lookup_key(request.billing_cycle)
+            seat_prices = stripe.Price.list(lookup_keys=[seat_lookup_key], active=True)
+            if not seat_prices.data:
+                raise HTTPException(status_code=500, detail=f"Stripe price not found for lookup_key: {seat_lookup_key}")
+            line_items.append({'price': seat_prices.data[0].id, 'quantity': request.extra_seats})
+
+        # Create checkout session with plan metadata
         session = stripe.checkout.Session.create(
             customer=customer.id,
             payment_method_types=['card'],
-            line_items=[{
-                'price': STRIPE_PRICE_ID,
-                'quantity': 1,
-            }],
+            line_items=line_items,
             mode='subscription',
             success_url=request.success_url,
             cancel_url=request.cancel_url,
+            subscription_data={
+                'metadata': {
+                    'company_id': request.company_id,
+                    'plan_type': request.plan_type,
+                    'billing_cycle': request.billing_cycle,
+                    'extra_seats': str(request.extra_seats),
+                }
+            },
             metadata={
-                'company_id': request.company_id
+                'company_id': request.company_id,
+                'plan_type': request.plan_type,
+                'billing_cycle': request.billing_cycle,
+                'extra_seats': str(request.extra_seats),
             }
         )
-        
+
         return CheckoutResponse(
             checkout_url=session.url,
             session_id=session.id
         )
-        
-    except stripe.error.StripeError as e:
+
+    except HTTPException:
+        raise
+    except stripe.StripeError as e:
         raise HTTPException(status_code=400, detail=f"Stripe error: {str(e)}") from e
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}") from e
@@ -208,7 +241,7 @@ async def create_portal_session(request: PortalRequest, current_user: str = Depe
         
         return PortalResponse(portal_url=session.url)
         
-    except stripe.error.StripeError as e:
+    except stripe.StripeError as e:
         raise HTTPException(status_code=400, detail=f"Stripe error: {str(e)}") from e
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}") from e
@@ -252,6 +285,252 @@ async def get_subscription_status(company_id: str, current_user: str = Depends(r
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error checking subscription status: {str(e)}") from e
+
+class CompanyUserCount(BaseModel):
+    active_users: int
+    pending_invites: int
+    total: int
+
+@router.get("/company-user-count/{company_id}", response_model=CompanyUserCount)
+async def get_company_user_count(company_id: str, current_user: str = Depends(require_auth)):
+    """
+    Get the count of active users and pending invites for a company.
+    Used by the pricing page and team management to show seat usage.
+    """
+    try:
+        users_result = supabase.table('users').select('id', count='exact').eq('company_id', company_id).execute()
+        invites_result = supabase.table('invites').select('id', count='exact').eq('company_id', company_id).eq('status', 'Pending').execute()
+
+        active_users = users_result.count or 0
+        pending_invites = invites_result.count or 0
+
+        return CompanyUserCount(
+            active_users=active_users,
+            pending_invites=pending_invites,
+            total=active_users + pending_invites,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error counting users: {str(e)}") from e
+
+class UpdateSeatsRequest(BaseModel):
+    company_id: str
+    new_extra_seats: int  # New total of extra seats (not a delta)
+
+class ChangePlanRequest(BaseModel):
+    company_id: str
+    new_plan_type: str  # "starter" or "business"
+
+
+@router.post("/update-seats")
+async def update_seats(request: UpdateSeatsRequest, user_data: str = Depends(require_auth)):
+    """
+    Update the number of extra seats on an existing subscription.
+    Modifies the Stripe subscription line item for extra seats.
+    Stripe webhook will auto-update local DB when subscription.updated fires.
+    """
+    if not stripe.api_key:
+        raise HTTPException(status_code=500, detail="Stripe not configured")
+
+    if request.new_extra_seats < 0:
+        raise HTTPException(status_code=400, detail="Extra seats cannot be negative.")
+
+    try:
+        # Get current subscription
+        sub_result = supabase.table('subscriptions').select('*').eq(
+            'company_id', request.company_id
+        ).in_('status', ['active', 'trialing']).maybe_single().execute()
+
+        if not sub_result.data:
+            raise HTTPException(status_code=404, detail="No active subscription found.")
+
+        sub = sub_result.data
+        plan_type = sub.get('plan_type', 'starter')
+        billing_cycle = sub.get('billing_cycle', 'monthly')
+        included_users = sub.get('included_users', 3)
+        new_max = included_users + request.new_extra_seats
+
+        # Validate: new max must accommodate current users + pending invites
+        from app.libs.user_limits import check_user_limit
+        limit_info = await check_user_limit(request.company_id, supabase)
+        current_users = limit_info['current_users']
+
+        if new_max < current_users:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cannot reduce to {new_max} seats. You currently have {current_users} users/invites. Remove users first."
+            )
+
+        # Retrieve the Stripe subscription
+        try:
+            stripe_sub = stripe.Subscription.retrieve(sub['stripe_subscription_id'])
+        except stripe.InvalidRequestError:
+            raise HTTPException(
+                status_code=404,
+                detail="Subscription not found in Stripe. It may have been deleted or created in a different environment. Please re-subscribe."
+            )
+
+        # Find existing line items
+        base_item = None
+        seat_item = None
+        for item in stripe_sub['items']['data']:
+            lookup_key = item.get('price', {}).get('lookup_key', '') or ''
+            if resolve_plan_from_lookup_key(lookup_key):
+                base_item = item
+            elif is_extra_seat_lookup_key(lookup_key):
+                seat_item = item
+
+        items_update = []
+
+        if request.new_extra_seats > 0:
+            # Resolve extra seat price
+            seat_lookup_key = get_extra_seat_lookup_key(billing_cycle)
+            seat_prices = stripe.Price.list(lookup_keys=[seat_lookup_key], active=True)
+            if not seat_prices.data:
+                raise HTTPException(status_code=500, detail=f"Extra seat price not found for {seat_lookup_key}")
+
+            if seat_item:
+                # Update existing seat line item quantity
+                items_update.append({
+                    'id': seat_item['id'],
+                    'quantity': request.new_extra_seats,
+                })
+            else:
+                # Add new seat line item
+                items_update.append({
+                    'price': seat_prices.data[0].id,
+                    'quantity': request.new_extra_seats,
+                })
+        elif seat_item:
+            # Remove seat line item (set to deleted)
+            items_update.append({
+                'id': seat_item['id'],
+                'deleted': True,
+            })
+
+        if items_update:
+            stripe.Subscription.modify(
+                sub['stripe_subscription_id'],
+                items=items_update,
+                proration_behavior='create_prorations',
+                metadata={
+                    'company_id': request.company_id,
+                    'plan_type': plan_type,
+                    'billing_cycle': billing_cycle,
+                    'extra_seats': str(request.new_extra_seats),
+                }
+            )
+
+        return {"status": "success", "new_extra_seats": request.new_extra_seats, "new_max_users": new_max}
+
+    except HTTPException:
+        raise
+    except stripe.StripeError as e:
+        raise HTTPException(status_code=400, detail=f"Stripe error: {str(e)}") from e
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}") from e
+
+
+@router.post("/change-plan")
+async def change_plan(request: ChangePlanRequest, user_data: str = Depends(require_auth)):
+    """
+    Change the base plan (starter <-> business) on an existing subscription.
+    Swaps the base plan price on the Stripe subscription with proration.
+    Stripe webhook will auto-update local DB when subscription.updated fires.
+    """
+    if not stripe.api_key:
+        raise HTTPException(status_code=500, detail="Stripe not configured")
+
+    if request.new_plan_type not in PLANS:
+        raise HTTPException(status_code=400, detail=f"Invalid plan type: {request.new_plan_type}")
+
+    try:
+        # Get current subscription
+        sub_result = supabase.table('subscriptions').select('*').eq(
+            'company_id', request.company_id
+        ).in_('status', ['active', 'trialing']).maybe_single().execute()
+
+        if not sub_result.data:
+            raise HTTPException(status_code=404, detail="No active subscription found.")
+
+        sub = sub_result.data
+        current_plan = sub.get('plan_type', 'starter')
+        billing_cycle = sub.get('billing_cycle', 'monthly')
+        extra_seats = sub.get('extra_seats', 0)
+
+        if current_plan == request.new_plan_type:
+            raise HTTPException(status_code=400, detail="Already on this plan.")
+
+        new_included = PLANS[request.new_plan_type]['included_users']
+        new_max = new_included + extra_seats
+
+        # If downgrading, validate user count fits
+        if PLANS.get(current_plan, {}).get('included_users', 0) > new_included:
+            from app.libs.user_limits import check_user_limit
+            limit_info = await check_user_limit(request.company_id, supabase)
+            current_users = limit_info['current_users']
+
+            if current_users > new_max:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Cannot downgrade: you have {current_users} users/invites but the new plan allows only {new_max}. Remove users first."
+                )
+
+        # Retrieve the Stripe subscription
+        try:
+            stripe_sub = stripe.Subscription.retrieve(sub['stripe_subscription_id'])
+        except stripe.InvalidRequestError:
+            raise HTTPException(
+                status_code=404,
+                detail="Subscription not found in Stripe. It may have been deleted or created in a different environment. Please re-subscribe."
+            )
+
+        # Find the base plan line item
+        base_item = None
+        for item in stripe_sub['items']['data']:
+            lookup_key = item.get('price', {}).get('lookup_key', '') or ''
+            if resolve_plan_from_lookup_key(lookup_key):
+                base_item = item
+                break
+
+        if not base_item:
+            raise HTTPException(status_code=500, detail="Could not find base plan item on Stripe subscription.")
+
+        # Resolve new plan price
+        new_lookup_key = get_plan_lookup_key(request.new_plan_type, billing_cycle)
+        new_prices = stripe.Price.list(lookup_keys=[new_lookup_key], active=True)
+        if not new_prices.data:
+            raise HTTPException(status_code=500, detail=f"Price not found for {new_lookup_key}")
+
+        # Swap the base plan
+        stripe.Subscription.modify(
+            sub['stripe_subscription_id'],
+            items=[{
+                'id': base_item['id'],
+                'price': new_prices.data[0].id,
+            }],
+            proration_behavior='create_prorations',
+            metadata={
+                'company_id': request.company_id,
+                'plan_type': request.new_plan_type,
+                'billing_cycle': billing_cycle,
+                'extra_seats': str(extra_seats),
+            }
+        )
+
+        return {
+            "status": "success",
+            "new_plan_type": request.new_plan_type,
+            "new_included_users": new_included,
+            "new_max_users": new_max,
+        }
+
+    except HTTPException:
+        raise
+    except stripe.StripeError as e:
+        raise HTTPException(status_code=400, detail=f"Stripe error: {str(e)}") from e
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}") from e
+
 
 @router.post("/webhook")
 async def stripe_webhook(request: Request, stripe_signature: str = Header(None)):
@@ -345,7 +624,7 @@ async def stripe_webhook(request: Request, stripe_signature: str = Header(None))
                     try:
                         subscription = stripe.Subscription.retrieve(subscription_id)
                         customer_id = subscription.customer
-                    except stripe.error.StripeError as e:
+                    except stripe.StripeError as e:
                         print(f"Error retrieving subscription {subscription_id} for invoice: {e}")
 
             if not customer_id:
@@ -371,7 +650,46 @@ async def stripe_webhook(request: Request, stripe_signature: str = Header(None))
                     'current_period_end': datetime.fromtimestamp(subscription['current_period_end'], tz=timezone.utc).isoformat(),
                     'updated_at': datetime.now(timezone.utc).isoformat()
                 }
-                
+
+                # Extract plan metadata from subscription items
+                items = subscription.get('items', {}).get('data', [])
+                plan_info = None
+                extra_seats = 0
+
+                for item in items:
+                    price = item.get('price', {})
+                    lookup_key = price.get('lookup_key', '') or ''
+
+                    # Check if this item is a base plan
+                    resolved = resolve_plan_from_lookup_key(lookup_key)
+                    if resolved:
+                        plan_info = resolved
+
+                    # Check if this item is extra seats
+                    if is_extra_seat_lookup_key(lookup_key):
+                        extra_seats = item.get('quantity', 0)
+
+                if plan_info:
+                    subscription_data['plan_type'] = plan_info['plan_type']
+                    subscription_data['billing_cycle'] = plan_info['billing_cycle']
+                    subscription_data['included_users'] = plan_info['included_users']
+                    subscription_data['extra_seats'] = extra_seats
+                    print(f"[STRIPE] Plan resolved: {plan_info['plan_type']} ({plan_info['billing_cycle']}), extra_seats={extra_seats}")
+                else:
+                    # Fallback: check checkout session metadata
+                    checkout_meta = subscription.get('metadata', {})
+                    if checkout_meta.get('plan_type'):
+                        from app.libs.pricing_config import PLANS
+                        pt = checkout_meta['plan_type']
+                        bc = checkout_meta.get('billing_cycle', 'monthly')
+                        es = int(checkout_meta.get('extra_seats', '0'))
+                        if pt in PLANS:
+                            subscription_data['plan_type'] = pt
+                            subscription_data['billing_cycle'] = bc
+                            subscription_data['included_users'] = PLANS[pt]['included_users']
+                            subscription_data['extra_seats'] = es
+                            print(f"[STRIPE] Plan from metadata: {pt} ({bc}), extra_seats={es}")
+
                 # Upsert subscription, allowing for floating subscriptions
                 supabase.table('subscriptions').upsert(subscription_data, on_conflict='stripe_subscription_id').execute()
                 print(f"Upserted subscription for company {company_id or 'unassigned'} with status {subscription['status']}")
@@ -420,7 +738,7 @@ async def stripe_webhook_v2(request: Request, stripe_signature: str = Header(Non
         )
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid payload")
-    except stripe.error.SignatureVerificationError:
+    except stripe.SignatureVerificationError:
         raise HTTPException(status_code=400, detail="Invalid signature")
     
     print("--- End of request on /webhook-v2 ---")
@@ -489,7 +807,7 @@ async def find_company_with_retry(customer_id: str, max_retries: int = 10, delay
                         }).eq('id', company_id).execute()
                         
                         return company_id
-            except stripe.error.StripeError as e:
+            except stripe.StripeError as e:
                 print(f"Stripe API error during fallback lookup: {str(e)}")
             
             # If this is the last attempt, don't wait
