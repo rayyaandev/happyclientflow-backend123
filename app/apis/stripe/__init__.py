@@ -179,14 +179,14 @@ async def create_checkout_session(request: CheckoutRequest, user_data: str = Dep
             line_items.append({'price': seat_prices.data[0].id, 'quantity': request.extra_seats})
 
         # Create checkout session with plan metadata
-        session = stripe.checkout.Session.create(
-            customer=customer.id,
-            payment_method_types=['card'],
-            line_items=line_items,
-            mode='subscription',
-            success_url=request.success_url,
-            cancel_url=request.cancel_url,
-            subscription_data={
+        checkout_params = {
+            'customer': customer.id,
+            'payment_method_types': ['card'],
+            'line_items': line_items,
+            'mode': 'subscription',
+            'success_url': request.success_url,
+            'cancel_url': request.cancel_url,
+            'subscription_data': {
                 'metadata': {
                     'company_id': request.company_id,
                     'plan_type': request.plan_type,
@@ -194,13 +194,19 @@ async def create_checkout_session(request: CheckoutRequest, user_data: str = Dep
                     'extra_seats': str(request.extra_seats),
                 }
             },
-            metadata={
+            'metadata': {
                 'company_id': request.company_id,
                 'plan_type': request.plan_type,
                 'billing_cycle': request.billing_cycle,
                 'extra_seats': str(request.extra_seats),
-            }
-        )
+            },
+        }
+
+        # Apply 30% discount coupon for annual subscriptions
+        if request.billing_cycle == 'annual':
+            checkout_params['discounts'] = [{'coupon': 'J8nDaYwq'}]
+
+        session = stripe.checkout.Session.create(**checkout_params)
 
         return CheckoutResponse(
             checkout_url=session.url,
