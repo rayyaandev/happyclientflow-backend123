@@ -449,9 +449,9 @@ async def update_seats(request: UpdateSeatsRequest, user_data: str = Depends(req
             print(f"[UPDATE-SEATS] Stripe subscription modified successfully. Status: {modified_sub.get('status')}")
 
             # Update Supabase immediately so frontend gets fresh data without waiting for webhook
+            # Note: max_users is a generated column, so we only update the source columns
             supabase.table('subscriptions').update({
                 'extra_seats': request.new_extra_seats,
-                'max_users': new_max,
             }).eq('id', sub['id']).execute()
         else:
             print(f"[UPDATE-SEATS] WARNING: items_update is empty, no Stripe modification made!")
@@ -554,10 +554,10 @@ async def change_plan(request: ChangePlanRequest, user_data: str = Depends(requi
         )
 
         # Update Supabase immediately so frontend gets fresh data without waiting for webhook
+        # Note: max_users is a generated column, so we only update the source columns
         supabase.table('subscriptions').update({
             'plan_type': request.new_plan_type,
             'included_users': new_included,
-            'max_users': new_max,
         }).eq('id', sub['id']).execute()
 
         return {
