@@ -330,6 +330,71 @@ async def get_company_user_count(company_id: str, current_user: str = Depends(re
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error counting users: {str(e)}") from e
 
+class InvoiceItem(BaseModel):
+    id: str
+    number: Optional[str] = None
+    amount_due: int  # in cents
+    currency: str
+    status: Optional[str] = None  # "paid", "open", "void", "draft", "uncollectible"
+    created: int  # Unix timestamp
+    invoice_pdf: Optional[str] = None
+    hosted_invoice_url: Optional[str] = None
+
+class InvoiceListResponse(BaseModel):
+    invoices: List[InvoiceItem]
+    has_more: bool
+
+@router.get("/invoices/{company_id}", response_model=InvoiceListResponse)
+async def get_invoices(company_id: str, current_user: str = Depends(require_auth)):
+    """
+    Get Stripe invoices for a company.
+    Looks up the stripe_customer_id from the companies table, then fetches invoices from Stripe.
+    """
+    if not stripe.api_key:
+        raise HTTPException(status_code=500, detail="Stripe not configured")
+
+    print(f"[AUTH] Getting invoices for user: {current_user}, company: {company_id}")
+
+    try:
+        company_response = supabase.table('companies').select('stripe_customer_id').eq('id', company_id).single().execute()
+
+        if not company_response.data:
+            raise HTTPException(status_code=404, detail="Company not found")
+
+        stripe_customer_id = company_response.data.get('stripe_customer_id')
+        if not stripe_customer_id:
+            return InvoiceListResponse(invoices=[], has_more=False)
+
+        invoices_response = stripe.Invoice.list(
+            customer=stripe_customer_id,
+            limit=100,
+        )
+
+        invoice_items = []
+        for inv in invoices_response.data:
+            invoice_items.append(InvoiceItem(
+                id=inv.id,
+                number=inv.number,
+                amount_due=inv.amount_due,
+                currency=inv.currency,
+                status=inv.status,
+                created=inv.created,
+                invoice_pdf=inv.invoice_pdf,
+                hosted_invoice_url=inv.hosted_invoice_url,
+            ))
+
+        return InvoiceListResponse(
+            invoices=invoice_items,
+            has_more=invoices_response.has_more,
+        )
+
+    except HTTPException:
+        raise
+    except stripe.StripeError as e:
+        raise HTTPException(status_code=400, detail=f"Stripe error: {str(e)}") from e
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching invoices: {str(e)}") from e
+
 class UpdateSeatsRequest(BaseModel):
     company_id: str
     new_extra_seats: int  # New total of extra seats (not a delta)
