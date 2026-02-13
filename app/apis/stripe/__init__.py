@@ -438,7 +438,8 @@ async def update_seats(request: UpdateSeatsRequest, user_data: str = Depends(req
             modified_sub = stripe.Subscription.modify(
                 sub['stripe_subscription_id'],
                 items=items_update,
-                proration_behavior='create_prorations',
+                proration_behavior='always_invoice',
+                billing_cycle_anchor='now',
                 metadata={
                     'company_id': request.company_id,
                     'plan_type': plan_type,
@@ -537,14 +538,15 @@ async def change_plan(request: ChangePlanRequest, user_data: str = Depends(requi
         if not new_prices.data:
             raise HTTPException(status_code=500, detail=f"Price not found for {new_lookup_key}")
 
-        # Swap the base plan
+        # Swap the base plan — charge immediately and reset billing cycle
         stripe.Subscription.modify(
             sub['stripe_subscription_id'],
             items=[{
                 'id': base_item['id'],
                 'price': new_prices.data[0].id,
             }],
-            proration_behavior='create_prorations',
+            proration_behavior='always_invoice',
+            billing_cycle_anchor='now',
             metadata={
                 'company_id': request.company_id,
                 'plan_type': request.new_plan_type,
