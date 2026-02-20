@@ -13,6 +13,7 @@ from app.env import mode, Mode # Import current environment mode
 from supabase import create_client, Client
 from app.libs.auth import get_user_from_request # Assuming this handles user auth
 from app.libs.auth_utils import require_admin  # Role-based access control
+from app.libs.pricing_config import resolve_plan_from_lookup_key, PLANS
 
 # Path for the registration page, ensure it matches frontend routing
 REGISTER_PATH = "register" # e.g., app.com/register?token=xyz
@@ -43,6 +44,20 @@ class SendInvitationEmailRequest(BaseModel):
     token: str
     companyName: Optional[str] = "Your Company"
     language: Optional[str] = "en"
+
+class CreateAndSendInviteRequest(BaseModel):
+    email: EmailStr
+    role: Optional[str] = "ADMIN"
+    language: Optional[str] = "en"
+    frontendUrl: Optional[str] = None
+
+class UserLimitStatus(BaseModel):
+    allowed: bool
+    max_users: int
+    current_users: int
+    plan_type: Optional[str] = None
+    included_users: int = 0
+    extra_seats: int = 0
 
 class ValidateInviteRequest(BaseModel):
     token: str
@@ -164,6 +179,191 @@ async def send_invitation_email_via_api(
     
     return ResponseMessage(message="Invitation email dispatched successfully.")
 
+
+LEGACY_UNLIMITED_PRICE_ID = "price_1Ro10tFS4l6OGNWUaMYBCOmn"
+
+
+def _compute_user_limit(supabase: Client, company_id: str) -> dict:
+    """Compute user limit status for a company based on its subscription."""
+    # Get subscription
+    sub_res = (
+        supabase.table("subscriptions")
+        .select("plan_type, extra_seats, included_users, status, stripe_price_id")
+        .eq("company_id", company_id)
+        .eq("status", "active")
+        .maybe_single()
+        .execute()
+    )
+
+    if not sub_res.data:
+        # No active subscription — allow a generous default so free/trial users aren't blocked
+        return {
+            "allowed": True,
+            "max_users": 1,
+            "current_users": 0,
+            "plan_type": None,
+            "included_users": 1,
+            "extra_seats": 0,
+        }
+
+    sub = sub_res.data
+    plan_type = sub.get("plan_type")
+    stripe_price_id = sub.get("stripe_price_id")
+    included_users = sub.get("included_users") or 0
+    extra_seats = sub.get("extra_seats") or 0
+
+    # Legacy price: no seat limit enforcement
+    if stripe_price_id == LEGACY_UNLIMITED_PRICE_ID:
+        return {
+            "allowed": True,
+            "max_users": 999,
+            "current_users": 0,
+            "plan_type": plan_type,
+            "included_users": 999,
+            "extra_seats": 0,
+        }
+
+    # If included_users not stored on the row, resolve from plan config
+    if not included_users and plan_type and plan_type in PLANS:
+        included_users = PLANS[plan_type]["included_users"]
+
+    max_users = included_users + extra_seats
+
+    # Count current users + pending invites for this company
+    users_res = supabase.table("users").select("id", count="exact").eq("company_id", company_id).execute()
+    current_users = users_res.count or 0
+
+    pending_res = supabase.table("invites").select("id", count="exact").eq("company_id", company_id).eq("status", "Pending").execute()
+    pending_count = pending_res.count or 0
+
+    total_current = current_users + pending_count
+
+    return {
+        "allowed": total_current < max_users,
+        "max_users": max_users,
+        "current_users": total_current,
+        "plan_type": plan_type,
+        "included_users": included_users,
+        "extra_seats": extra_seats,
+    }
+
+
+@router.get("/user-limit-status", response_model=UserLimitStatus, name="get_user_limit_status")
+async def get_user_limit_status(current_user: dict = Depends(get_user_from_request)):
+    """Get the current user limit status for the authenticated user's company."""
+    supabase = get_supabase_client()
+
+    # get_user_from_request returns user_id string
+    user_id = current_user if isinstance(current_user, str) else current_user.get("id")
+    user_res = (
+        supabase.table("users")
+        .select("company_id")
+        .eq("id", user_id)
+        .maybe_single()
+        .execute()
+    )
+    if not user_res.data or not user_res.data.get("company_id"):
+        raise HTTPException(status_code=403, detail="Company not found for user.")
+
+    company_id = user_res.data["company_id"]
+    return _compute_user_limit(supabase, company_id)
+
+
+@router.post("/create-and-send", response_model=InviteRead, name="create_and_send_invite")
+async def create_and_send_invite(
+    payload: CreateAndSendInviteRequest = Body(...),
+    current_user_id: str = Depends(require_admin),
+):
+    """
+    Create an invitation and send the email in a single atomic operation
+    with user limit enforcement.
+    """
+    supabase = get_supabase_client()
+
+    # Resolve admin's company
+    admin_res = (
+        supabase.table("users")
+        .select("company_id")
+        .eq("id", current_user_id)
+        .maybe_single()
+        .execute()
+    )
+    if not admin_res.data or not admin_res.data.get("company_id"):
+        raise HTTPException(status_code=403, detail="Company not found for user.")
+
+    company_id = admin_res.data["company_id"]
+
+    # Enforce user limit
+    limit = _compute_user_limit(supabase, company_id)
+    if not limit["allowed"]:
+        raise HTTPException(status_code=403, detail={
+            "error": "user_limit_reached",
+            "max_users": limit["max_users"],
+            "current_users": limit["current_users"],
+        })
+
+    # Check for duplicate pending invite
+    dup_res = (
+        supabase.table("invites")
+        .select("id")
+        .eq("company_id", company_id)
+        .eq("email", payload.email)
+        .eq("status", "Pending")
+        .maybe_single()
+        .execute()
+    )
+    if dup_res.data:
+        raise HTTPException(status_code=409, detail="A pending invitation already exists for this email.")
+
+    # Normalise role
+    role = payload.role.upper() if payload.role else "ADMIN"
+    if role not in ("ADMIN", "TEAM_MEMBER"):
+        role = "ADMIN"
+
+    # Get company name for the email
+    company_res = (
+        supabase.table("companies")
+        .select("name")
+        .eq("id", company_id)
+        .maybe_single()
+        .execute()
+    )
+    company_name = company_res.data.get("name") if company_res.data else "Happy Client Flow"
+
+    # Create invite record
+    token = str(uuid.uuid4())
+    now = datetime.datetime.now(datetime.timezone.utc)
+    expires_at = now + datetime.timedelta(days=14)
+
+    invite_data = {
+        "email": payload.email,
+        "role": role,
+        "token": token,
+        "status": "Pending",
+        "company_id": company_id,
+        "invited_by_user_id": current_user_id,
+        "created_at": now.isoformat(),
+        "expires_at": expires_at.isoformat(),
+    }
+
+    insert_res = supabase.table("invites").insert(invite_data).execute()
+    if not insert_res.data:
+        raise HTTPException(status_code=500, detail="Failed to create invitation record.")
+
+    created_invite = insert_res.data[0]
+
+    # Send email (non-blocking — invite is already persisted)
+    email_sent = _send_actual_invitation_email(
+        email_to=payload.email,
+        role=role,
+        token=token,
+        company_name=company_name,
+        language=payload.language or "en",
+    )
+    if not email_sent:
+        print(f"WARNING: Invite {created_invite['id']} created but email failed to send.")
+
+    return InviteRead(**created_invite)
 
 
 @router.get("", response_model=List[InviteRead], name="get_all_invites_for_company")
