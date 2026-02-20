@@ -195,7 +195,7 @@ def _compute_user_limit(supabase: Client, company_id: str) -> dict:
         .execute()
     )
 
-    if not sub_res.data:
+    if not sub_res or not sub_res.data:
         # No active subscription — allow a generous default so free/trial users aren't blocked
         return {
             "allowed": True,
@@ -262,7 +262,7 @@ async def get_user_limit_status(current_user: dict = Depends(get_user_from_reque
         .maybe_single()
         .execute()
     )
-    if not user_res.data or not user_res.data.get("company_id"):
+    if not user_res or not user_res.data or not user_res.data.get("company_id"):
         raise HTTPException(status_code=403, detail="Company not found for user.")
 
     company_id = user_res.data["company_id"]
@@ -288,7 +288,7 @@ async def create_and_send_invite(
         .maybe_single()
         .execute()
     )
-    if not admin_res.data or not admin_res.data.get("company_id"):
+    if not admin_res or not admin_res.data or not admin_res.data.get("company_id"):
         raise HTTPException(status_code=403, detail="Company not found for user.")
 
     company_id = admin_res.data["company_id"]
@@ -312,7 +312,7 @@ async def create_and_send_invite(
         .maybe_single()
         .execute()
     )
-    if dup_res.data:
+    if dup_res and dup_res.data:
         raise HTTPException(status_code=409, detail="A pending invitation already exists for this email.")
 
     # Normalise role
@@ -328,7 +328,7 @@ async def create_and_send_invite(
         .maybe_single()
         .execute()
     )
-    company_name = company_res.data.get("name") if company_res.data else "Happy Client Flow"
+    company_name = company_res.data.get("name") if (company_res and company_res.data) else "Happy Client Flow"
 
     # Create invite record
     token = str(uuid.uuid4())
