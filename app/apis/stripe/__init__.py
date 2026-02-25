@@ -176,11 +176,11 @@ async def create_checkout_session(request: CheckoutRequest, user_data: str = Dep
         # Create checkout session with plan metadata
         session = stripe.checkout.Session.create(
             customer=customer.id,
-            payment_method_types=['card'],
             line_items=line_items,
             mode='subscription',
             success_url=request.success_url,
             cancel_url=request.cancel_url,
+            allow_promotion_codes=True,
             subscription_data={
                 'metadata': {
                     'company_id': request.company_id,
