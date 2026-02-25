@@ -174,14 +174,16 @@ async def create_checkout_session(request: CheckoutRequest, user_data: str = Dep
             line_items.append({'price': seat_prices.data[0].id, 'quantity': request.extra_seats})
 
         # Create checkout session with plan metadata
-        session = stripe.checkout.Session.create(
-            customer=customer.id,
-            line_items=line_items,
-            mode='subscription',
-            success_url=request.success_url,
-            cancel_url=request.cancel_url,
-            allow_promotion_codes=True,
-            subscription_data={
+        # For annual billing: auto-apply 30% discount coupon
+        # For monthly billing: allow manual promo code entry
+        # (Stripe doesn't allow both discounts and allow_promotion_codes simultaneously)
+        checkout_params = {
+            'customer': customer.id,
+            'line_items': line_items,
+            'mode': 'subscription',
+            'success_url': request.success_url,
+            'cancel_url': request.cancel_url,
+            'subscription_data': {
                 'metadata': {
                     'company_id': request.company_id,
                     'plan_type': request.plan_type,
@@ -189,13 +191,22 @@ async def create_checkout_session(request: CheckoutRequest, user_data: str = Dep
                     'extra_seats': str(request.extra_seats),
                 }
             },
-            metadata={
+            'metadata': {
                 'company_id': request.company_id,
                 'plan_type': request.plan_type,
                 'billing_cycle': request.billing_cycle,
                 'extra_seats': str(request.extra_seats),
             },
-        )
+        }
+
+        if request.billing_cycle == 'annual':
+            # Auto-apply 30% annual discount coupon
+            checkout_params['discounts'] = [{'coupon': 'U4cnQhGO'}]
+        else:
+            # Allow manual promo code entry for monthly plans
+            checkout_params['allow_promotion_codes'] = True
+
+        session = stripe.checkout.Session.create(**checkout_params)
 
         return CheckoutResponse(
             checkout_url=session.url,
