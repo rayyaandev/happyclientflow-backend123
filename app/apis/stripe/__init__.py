@@ -184,6 +184,7 @@ async def create_checkout_session(request: CheckoutRequest, user_data: str = Dep
             'success_url': request.success_url,
             'cancel_url': request.cancel_url,
             'automatic_tax': {'enabled': True},
+            'customer_update': {'address': 'auto'},
             'subscription_data': {
                 'metadata': {
                     'company_id': request.company_id,
