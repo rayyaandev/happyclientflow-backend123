@@ -212,14 +212,23 @@ def _compute_user_limit(supabase: Client, company_id: str) -> dict:
     included_users = sub.get("included_users") or 0
     extra_seats = sub.get("extra_seats") or 0
 
-    # Legacy price: no seat limit enforcement
+    # Legacy price: no seat limit enforcement, just count real users from DB
     if stripe_price_id == LEGACY_UNLIMITED_PRICE_ID:
+        # Count current users + pending invites
+        users_res = supabase.table("users").select("id", count="exact").eq("company_id", company_id).execute()
+        legacy_current_users = users_res.count or 0
+
+        pending_res = supabase.table("invites").select("id", count="exact").eq("company_id", company_id).eq("status", "Pending").execute()
+        legacy_pending = pending_res.count or 0
+
+        legacy_total = legacy_current_users + legacy_pending
+
         return {
-            "allowed": True,
-            "max_users": 999,
-            "current_users": 0,
+            "allowed": legacy_total < 10,
+            "max_users": 10,
+            "current_users": legacy_total,
             "plan_type": plan_type,
-            "included_users": 999,
+            "included_users": 10,
             "extra_seats": 0,
         }
 
