@@ -224,11 +224,11 @@ def _compute_user_limit(supabase: Client, company_id: str) -> dict:
         legacy_total = legacy_current_users + legacy_pending
 
         return {
-            "allowed": legacy_total < 10,
-            "max_users": 10,
+            "allowed": True,
+            "max_users": 999,
             "current_users": legacy_total,
             "plan_type": plan_type,
-            "included_users": 10,
+            "included_users": 999,
             "extra_seats": 0,
         }
 
