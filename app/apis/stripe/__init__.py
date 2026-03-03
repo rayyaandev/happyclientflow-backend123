@@ -294,6 +294,79 @@ async def get_subscription_status(company_id: str, current_user: str = Depends(r
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error checking subscription status: {str(e)}") from e
 
+class InvoiceItem(BaseModel):
+    id: str
+    number: Optional[str] = None
+    amount_due: int
+    currency: str
+    status: Optional[str] = None
+    created: int
+    invoice_pdf: Optional[str] = None
+    hosted_invoice_url: Optional[str] = None
+
+class InvoiceListResponse(BaseModel):
+    invoices: List[InvoiceItem]
+    has_more: bool
+
+@router.get("/invoices/{company_id}")
+async def get_invoices(company_id: str, current_user: str = Depends(require_auth)):
+    """
+    Get Stripe invoices for a company
+    """
+    if not stripe.api_key:
+        raise HTTPException(status_code=500, detail="Stripe not configured")
+
+    print(f"[STRIPE] Getting invoices for company {company_id}, user: {current_user}")
+
+    try:
+        # Look up stripe_customer_id from subscriptions table first
+        sub_response = supabase.table('subscriptions').select('stripe_customer_id').eq('company_id', company_id).execute()
+
+        customer_id = None
+        if sub_response.data:
+            customer_id = sub_response.data[0].get('stripe_customer_id')
+
+        # Fallback: look up stripe_customer_id from companies table
+        if not customer_id:
+            company_response = supabase.table('companies').select('stripe_customer_id').eq('id', company_id).single().execute()
+            if company_response.data:
+                customer_id = company_response.data.get('stripe_customer_id')
+
+        if not customer_id:
+            # No Stripe customer found – return empty list (not an error)
+            return InvoiceListResponse(invoices=[], has_more=False)
+
+        # Fetch invoices from Stripe
+        stripe_invoices = stripe.Invoice.list(
+            customer=customer_id,
+            limit=100,
+        )
+
+        invoices = []
+        for inv in stripe_invoices.data:
+            invoices.append(InvoiceItem(
+                id=inv.id,
+                number=inv.number,
+                amount_due=inv.amount_due,
+                currency=inv.currency,
+                status=inv.status,
+                created=inv.created,
+                invoice_pdf=inv.invoice_pdf,
+                hosted_invoice_url=inv.hosted_invoice_url,
+            ))
+
+        return InvoiceListResponse(
+            invoices=invoices,
+            has_more=stripe_invoices.has_more,
+        )
+
+    except stripe.StripeError as e:
+        print(f"[STRIPE] Error fetching invoices: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"Stripe error: {str(e)}") from e
+    except Exception as e:
+        print(f"[STRIPE] Error fetching invoices: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}") from e
+
 @router.post("/webhook")
 async def stripe_webhook(request: Request, stripe_signature: str = Header(None)):
     """
