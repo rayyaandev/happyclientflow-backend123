@@ -96,12 +96,41 @@ def create_reminders_if_not_exists(
         base_url = "https://app.happyclientflow.de" # Or from config
         review_link = f"{base_url}/feedback?client_id={client['id']}&company_name={company['name'].replace(' ', '%20')}"
 
-        for template in templates:
-            # Calculate scheduled_at based on template's rules
+        # Build dictionary for quick lookup by ID
+        templates_by_id = {t["id"]: t for t in templates}
+        scheduled_times = {}
+
+        def get_scheduled_at(template_id, visited=None):
+            if visited is None:
+                visited = set()
+                
+            if template_id in scheduled_times:
+                return scheduled_times[template_id]
+                
+            if template_id in visited:
+                # Circular dependency detected, fallback
+                return datetime.now(timezone.utc)
+                
+            visited.add(template_id)
+                
+            template = templates_by_id.get(template_id)
+            if not template:
+                return datetime.now(timezone.utc)
+                
+            # Base start time
+            base_time = datetime.now(timezone.utc)
+            
+            # If there's a previous message, get its scheduled_at as our base time
+            prev_id = template.get("previous_message_template_id")
+            if prev_id and prev_id in templates_by_id:
+                prev_time = get_scheduled_at(prev_id, visited)
+                if prev_time:
+                    base_time = prev_time
+                
             send_value = template.get("scheduled_send_value")
             send_unit = template.get("scheduled_send_unit")
-            delta = timedelta(days=0)  # Default to no delay
-
+            delta = timedelta(days=0)
+            
             if send_value is not None and send_unit:
                 try:
                     value = int(send_value)
@@ -112,11 +141,18 @@ def create_reminders_if_not_exists(
                     elif send_unit == 'minutes':
                         delta = timedelta(minutes=value)
                 except (ValueError, TypeError):
-                    # If value is not a valid integer, skip this template or log it
-                    print(f"Warning: Invalid scheduled_send_value '{send_value}' for template {template.get('id')}. Skipping.")
-                    continue
+                    print(f"Warning: Invalid scheduled_send_value '{send_value}' for template {template_id}. Skipping.")
+                    scheduled_times[template_id] = None
+                    return None
+                    
+            scheduled_time = base_time + delta
+            scheduled_times[template_id] = scheduled_time
+            return scheduled_time
 
-            scheduled_at = datetime.now(timezone.utc) + delta
+        for template in templates:
+            scheduled_at = get_scheduled_at(template.get("id"))
+            if not scheduled_at:
+                continue
             
             reminder_insert_data = {
                 "author_id": company.get("owner_id"),
