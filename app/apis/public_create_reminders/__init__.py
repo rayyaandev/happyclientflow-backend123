@@ -140,6 +140,8 @@ def create_reminders_if_not_exists(
                         delta = timedelta(hours=value)
                     elif send_unit == 'minutes':
                         delta = timedelta(minutes=value)
+                    elif send_unit == 'seconds':
+                        delta = timedelta(seconds=value)
                 except (ValueError, TypeError):
                     print(f"Warning: Invalid scheduled_send_value '{send_value}' for template {template_id}. Skipping.")
                     scheduled_times[template_id] = None

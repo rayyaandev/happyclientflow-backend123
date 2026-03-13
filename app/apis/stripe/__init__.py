@@ -96,6 +96,14 @@ class SubscriptionStatus(BaseModel):
     current_period_end: Optional[datetime] = None
     product_name: Optional[str] = None
 
+class UpdateSeatsRequest(BaseModel):
+    company_id: str
+    new_extra_seats: int
+
+class ChangePlanRequest(BaseModel):
+    company_id: str
+    new_plan_type: str
+
 @router.post("/create-checkout-session", response_model=CheckoutResponse)
 async def create_checkout_session(request: CheckoutRequest, user_data: str = Depends(require_auth)):
     """
@@ -293,6 +301,142 @@ async def get_subscription_status(company_id: str, current_user: str = Depends(r
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error checking subscription status: {str(e)}") from e
+
+@router.post("/update-seats")
+async def update_seats(request: UpdateSeatsRequest, current_user: str = Depends(require_auth)):
+    """
+    Update extra seats on an existing subscription
+    """
+    if not stripe.api_key:
+        raise HTTPException(status_code=500, detail="Stripe not configured")
+
+    if request.new_extra_seats < 0:
+        raise HTTPException(status_code=400, detail="Extra seats cannot be negative")
+
+    try:
+        # Get active subscription
+        sub_response = supabase.table('subscriptions').select('*').eq('company_id', request.company_id).eq('status', 'active').execute()
+        
+        if not sub_response.data:
+            raise HTTPException(status_code=404, detail="No active subscription found")
+            
+        subscription_record = sub_response.data[0]
+        stripe_sub_id = subscription_record['stripe_subscription_id']
+        billing_cycle = subscription_record.get('billing_cycle', 'monthly')
+        
+        # Get extra seat lookup key for this billing cycle
+        seat_lookup_key = get_extra_seat_lookup_key(billing_cycle)
+        seat_prices = stripe.Price.list(lookup_keys=[seat_lookup_key], active=True)
+        if not seat_prices.data:
+            raise HTTPException(status_code=500, detail=f"Stripe price not found for extra seats: {seat_lookup_key}")
+        seat_price_id = seat_prices.data[0].id
+
+        # Retrieve Stripe subscription
+        stripe_sub = stripe.Subscription.retrieve(stripe_sub_id)
+        
+        # Find existing extra seat item
+        extra_seat_item = None
+        for item in stripe_sub['items']['data']:
+            price_lookup = item.get('price', {}).get('lookup_key')
+            if price_lookup and is_extra_seat_lookup_key(price_lookup):
+                extra_seat_item = item
+                break
+                
+        # Update subscription items
+        if extra_seat_item:
+            if request.new_extra_seats == 0:
+                stripe.SubscriptionItem.delete(extra_seat_item.id)
+            else:
+                stripe.SubscriptionItem.modify(extra_seat_item.id, quantity=request.new_extra_seats)
+        else:
+            if request.new_extra_seats > 0:
+                stripe.SubscriptionItem.create(
+                    subscription=stripe_sub.id,
+                    price=seat_price_id,
+                    quantity=request.new_extra_seats
+                )
+                
+        # Update local DB optimistically (webhook will also update)
+        supabase.table('subscriptions').update({
+            'extra_seats': request.new_extra_seats
+        }).eq('id', subscription_record['id']).execute()
+        
+        return {"status": "success", "message": "Seats updated"}
+                
+    except stripe.StripeError as e:
+        raise HTTPException(status_code=400, detail=f"Stripe error: {str(e)}") from e
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}") from e
+
+@router.post("/change-plan")
+async def change_plan(request: ChangePlanRequest, current_user: str = Depends(require_auth)):
+    """
+    Change the base plan on an existing subscription
+    """
+    if not stripe.api_key:
+        raise HTTPException(status_code=500, detail="Stripe not configured")
+
+    if request.new_plan_type not in PLANS:
+        raise HTTPException(status_code=400, detail=f"Invalid plan_type: {request.new_plan_type}")
+
+    try:
+        # Get active subscription
+        sub_response = supabase.table('subscriptions').select('*').eq('company_id', request.company_id).eq('status', 'active').execute()
+        
+        if not sub_response.data:
+            raise HTTPException(status_code=404, detail="No active subscription found")
+            
+        subscription_record = sub_response.data[0]
+        stripe_sub_id = subscription_record['stripe_subscription_id']
+        billing_cycle = subscription_record.get('billing_cycle', 'monthly')
+        
+        # Get new plan lookup key for current billing cycle
+        new_plan_lookup_key = get_plan_lookup_key(request.new_plan_type, billing_cycle)
+        new_prices = stripe.Price.list(lookup_keys=[new_plan_lookup_key], active=True)
+        if not new_prices.data:
+            raise HTTPException(status_code=500, detail=f"Stripe price not found for plan: {new_plan_lookup_key}")
+        new_price_id = new_prices.data[0].id
+
+        # Retrieve Stripe subscription
+        stripe_sub = stripe.Subscription.retrieve(stripe_sub_id)
+        
+        # Find existing base plan item
+        plan_item = None
+        for item in stripe_sub['items']['data']:
+            price_lookup = item.get('price', {}).get('lookup_key', '')
+            if resolve_plan_from_lookup_key(price_lookup):
+                plan_item = item
+                break
+                
+        if not plan_item:
+            raise HTTPException(status_code=500, detail="Could not find base plan on subscription")
+            
+        # Modify the subscription
+        stripe.Subscription.modify(
+            stripe_sub.id,
+            items=[{
+                "id": plan_item.id,
+                "price": new_price_id,
+            }],
+            proration_behavior="create_prorations"
+        )
+        
+        # Update local DB optimistically (webhook will also update)
+        supabase.table('subscriptions').update({
+            'plan_type': request.new_plan_type,
+            'included_users': PLANS[request.new_plan_type]['included_users']
+        }).eq('id', subscription_record['id']).execute()
+        
+        return {"status": "success", "message": "Plan changed"}
+        
+    except stripe.StripeError as e:
+        raise HTTPException(status_code=400, detail=f"Stripe error: {str(e)}") from e
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}") from e
 
 class InvoiceItem(BaseModel):
     id: str
