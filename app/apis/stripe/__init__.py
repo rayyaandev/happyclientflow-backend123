@@ -191,7 +191,7 @@ async def create_checkout_session(request: CheckoutRequest, user_data: str = Dep
             'mode': 'subscription',
             'success_url': request.success_url,
             'cancel_url': request.cancel_url,
-            'automatic_tax': {'enabled': True},
+            'automatic_tax': {'enabled': False},
             'customer_update': {'address': 'auto'},
             'subscription_data': {
                 'metadata': {
@@ -211,7 +211,7 @@ async def create_checkout_session(request: CheckoutRequest, user_data: str = Dep
 
         if request.billing_cycle == 'annual':
             # Auto-apply 30% annual discount coupon
-            checkout_params['discounts'] = [{'coupon': 'U4cnQhGO'}]
+            checkout_params['discounts'] = [{'coupon': 'J8nDaYwq'}]
         else:
             # Allow manual promo code entry for monthly plans
             checkout_params['allow_promotion_codes'] = True
@@ -230,10 +230,15 @@ async def create_checkout_session(request: CheckoutRequest, user_data: str = Dep
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}") from e
 
+LEGACY_PRICE_ID = "price_1Ro10tFS4l6OGNWUaMYBCOmn"
+NEW_PORTAL_CONFIG = "bpc_1TBJ7nFS4l6OGNWUdj7WyG7E"
+
 @router.post("/create-portal-session", response_model=PortalResponse)
 async def create_portal_session(request: PortalRequest, current_user: str = Depends(require_auth)):
     """
-    Create a Stripe customer portal session for subscription management
+    Create a Stripe customer portal session for subscription management.
+    Uses the new portal configuration for users on new pricing plans,
+    and the default portal configuration for legacy users.
     """
     if not stripe.api_key:
         raise HTTPException(status_code=500, detail="Stripe not configured")
@@ -241,19 +246,26 @@ async def create_portal_session(request: PortalRequest, current_user: str = Depe
     print(f"[AUTH] Creating portal session for user: {current_user}")
     
     try:
-        # Get subscription info to find Stripe customer
-        sub_response = supabase.table('subscriptions').select('stripe_customer_id').eq('company_id', request.company_id).execute()
+        # Get subscription info including stripe_price_id to determine legacy vs new plan
+        sub_response = supabase.table('subscriptions').select('stripe_customer_id, stripe_price_id').eq('company_id', request.company_id).execute()
         
         if not sub_response.data:
             raise HTTPException(status_code=404, detail="No subscription found for this company")
         
         customer_id = sub_response.data[0]['stripe_customer_id']
+        stripe_price_id = sub_response.data[0].get('stripe_price_id')
         
-        # Create portal session
-        session = stripe.billing_portal.Session.create(
-            customer=customer_id,
-            return_url=request.return_url
-        )
+        # Legacy users (old price) get the default portal; new plan users get the new portal config
+        portal_params = {
+            "customer": customer_id,
+            "return_url": request.return_url,
+        }
+        if stripe_price_id != LEGACY_PRICE_ID:
+            portal_params["configuration"] = NEW_PORTAL_CONFIG
+        
+        print(f"[STRIPE] Portal config: {'default (legacy)' if stripe_price_id == LEGACY_PRICE_ID else NEW_PORTAL_CONFIG} for price {stripe_price_id}")
+        
+        session = stripe.billing_portal.Session.create(**portal_params)
         
         return PortalResponse(portal_url=session.url)
         
