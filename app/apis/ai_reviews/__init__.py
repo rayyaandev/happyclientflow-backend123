@@ -13,9 +13,10 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 import databutton as db
 from openai import OpenAI
-import os
 import random
 import re
+
+from app.libs.reminder_scheduling import feedback_high_satisfaction_min
 
 # Initialize OpenAI client
 try:
@@ -233,6 +234,13 @@ def generate_ai_review(
     """
     if not client:
         raise HTTPException(status_code=500, detail="OpenAI client is not configured. Please check API key.")
+
+    min_sat = feedback_high_satisfaction_min()
+    if request.satisfaction < min_sat:
+        raise HTTPException(
+            status_code=400,
+            detail="AI review drafts are only available for high-satisfaction feedback.",
+        )
 
     # --- Step 1: Pick style preset from UUID ---
     style_preset_name = get_style_preset_from_uuid(request.customer_uuid)

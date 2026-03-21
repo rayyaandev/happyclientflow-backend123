@@ -7,12 +7,21 @@ Row Level Security (RLS) policies, ensuring that reminders can be created by any
 The endpoint checks if a client already has existing reminders and creates them if they don't exist.
 """
 
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, EmailStr
 from typing import List, Optional, Dict, Any
 from supabase import Client, create_client
 import databutton as db
-from datetime import datetime, timezone, timedelta
+
+from app.libs.reminder_scheduling import (
+    filter_followup_templates,
+    build_reminder_rows,
+    insert_reminder_rows,
+    cancel_pending_reminders_for_client,
+    client_should_not_receive_followups,
+)
 
 router = APIRouter()
 
@@ -58,6 +67,19 @@ def create_reminders_if_not_exists(
     It will only create reminders if no pending reminders exist for the client.
     """
     try:
+        # Low-satisfaction feedback: never schedule (and clear stray pending rows)
+        if client_should_not_receive_followups(supabase, request.client_id):
+            n = cancel_pending_reminders_for_client(supabase, request.client_id)
+            return {
+                "message": (
+                    "Client has submitted below-threshold feedback; "
+                    f"cancelled {n} pending reminder(s). No new reminders scheduled."
+                ),
+                "existing_reminders_count": 0,
+                "created_reminders": [],
+                "reminders_cancelled": n,
+            }
+
         # Check for existing pending reminders
         existing_check_res = supabase.from_("reminders").select("id, scheduled_at, template_id").eq("client_id", request.client_id).eq("sent_status", "pending").execute()
         
@@ -89,113 +111,38 @@ def create_reminders_if_not_exists(
                 "message": f"No formal reminder templates found for company {request.company_id}. No reminders created.",
                 "created_reminders": []
             }
-        templates = templates_res.data
-
-        # --- Prepare reminder data ---
-        reminders_to_insert = []
-        base_url = "https://app.happyclientflow.de" # Or from config
-        review_link = f"{base_url}/feedback?client_id={client['id']}&company_name={company['name'].replace(' ', '%20')}"
-
-        # Build dictionary for quick lookup by ID
-        templates_by_id = {t["id"]: t for t in templates}
-        scheduled_times = {}
-
-        def get_scheduled_at(template_id, visited=None):
-            if visited is None:
-                visited = set()
-                
-            if template_id in scheduled_times:
-                return scheduled_times[template_id]
-                
-            if template_id in visited:
-                # Circular dependency detected, fallback
-                return datetime.now(timezone.utc)
-                
-            visited.add(template_id)
-                
-            template = templates_by_id.get(template_id)
-            if not template:
-                return datetime.now(timezone.utc)
-                
-            # Base start time
-            base_time = datetime.now(timezone.utc)
-            
-            # If there's a previous message, get its scheduled_at as our base time
-            prev_id = template.get("previous_message_template_id")
-            if prev_id and prev_id in templates_by_id:
-                prev_time = get_scheduled_at(prev_id, visited)
-                if prev_time:
-                    base_time = prev_time
-                
-            send_value = template.get("scheduled_send_value")
-            send_unit = template.get("scheduled_send_unit")
-            delta = timedelta(days=0)
-            
-            if send_value is not None and send_unit:
-                try:
-                    value = int(send_value)
-                    if send_unit == 'days':
-                        delta = timedelta(days=value)
-                    elif send_unit == 'hours':
-                        delta = timedelta(hours=value)
-                    elif send_unit == 'minutes':
-                        delta = timedelta(minutes=value)
-                    elif send_unit == 'seconds':
-                        delta = timedelta(seconds=value)
-                except (ValueError, TypeError):
-                    print(f"Warning: Invalid scheduled_send_value '{send_value}' for template {template_id}. Skipping.")
-                    scheduled_times[template_id] = None
-                    return None
-                    
-            scheduled_time = base_time + delta
-            scheduled_times[template_id] = scheduled_time
-            return scheduled_time
-
-        for template in templates:
-            scheduled_at = get_scheduled_at(template.get("id"))
-            if not scheduled_at:
-                continue
-            
-            reminder_insert_data = {
-                "author_id": company.get("owner_id"),
-                "template_id": template.get("id"),
-                "client_id": client.get("id"),
-                "client_email": client.get("email"),
-                "title": client.get("title"),
-                "first_name": client.get("first_name"),
-                "last_name": client.get("last_name"),
-                "company_name": company.get("name"),
-                "product_name": client.get("product_used"), 
-                "review_link": review_link,
-                "scheduled_at": scheduled_at.isoformat(),
-                "sent_status": "pending",
+        templates = filter_followup_templates(templates_res.data)
+        if not templates:
+            return {
+                "message": f"No follow-up reminder templates found for company {request.company_id} (outreach templates are excluded). No reminders created.",
+                "created_reminders": [],
             }
-            reminders_to_insert.append(reminder_insert_data)
-        
-        # --- Insert Reminders ---
+
+        reminders_to_insert = build_reminder_rows(
+            client=client, company=company, templates=templates
+        )
+
         if not reminders_to_insert:
             return {
                 "message": "No reminders to create.",
-                "created_reminders": []
+                "created_reminders": [],
             }
 
-        insert_res = supabase.from_("reminders").insert(reminders_to_insert).execute()
-        
-        if insert_res.data:
-            created_reminders = insert_res.data
-            return {
-                "message": f"Successfully created {len(created_reminders)} new reminders for client {request.client_id}.",
-                "existing_reminders_count": 0,
-                "created_reminders_count": len(created_reminders),
-                "created_reminders": created_reminders
-            }
-        else:
-            # Handle potential insertion error from Supabase
-            error_detail = "Failed to create reminder entries in database."
-            if hasattr(insert_res, 'error') and insert_res.error:
-                error_detail = insert_res.error.message
+        created_reminders, error_detail = insert_reminder_rows(
+            supabase, reminders_to_insert
+        )
+        if error_detail:
             raise HTTPException(status_code=500, detail=error_detail)
+
+        return {
+            "message": f"Successfully created {len(created_reminders or [])} new reminders for client {request.client_id}.",
+            "existing_reminders_count": 0,
+            "created_reminders_count": len(created_reminders or []),
+            "created_reminders": created_reminders or [],
+        }
             
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"Error in create_reminders_if_not_exists for client {request.client_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
