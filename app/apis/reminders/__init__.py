@@ -10,9 +10,15 @@ from sendgrid.helpers.mail import Mail, From
 from supabase import create_client, Client
 from app.env import mode, Mode
 import datetime
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from twilio.rest import Client as TwilioClient
 import json
+
+from app.libs.reminder_scheduling import (
+    feedback_high_satisfaction_min,
+    is_scheduled_followup_template,
+    prefetch_latest_feedback_satisfaction,
+)
 
 router = APIRouter(prefix="/v1/reminders", tags=["reminders"])
 
@@ -41,22 +47,69 @@ async def process_reminders():
         print(f"Error fetching due reminders: {e}")
         raise HTTPException(status_code=500, detail="Failed to fetch due reminders.")
 
+    client_ids = list({r["client_id"] for r in due_reminders if r.get("client_id")})
+    latest_sat_by_client: Dict[str, Any] = prefetch_latest_feedback_satisfaction(
+        supabase, client_ids
+    )
+    min_stars = feedback_high_satisfaction_min()
+
     sent_count = 0
     failed_ids = []
 
     for reminder in due_reminders:
         try:
+            cid = reminder.get("client_id")
+            raw_sat = latest_sat_by_client.get(cid) if cid else None
+            if raw_sat is not None:
+                try:
+                    sat_val = int(raw_sat)
+                except (TypeError, ValueError):
+                    sat_val = None
+                if sat_val is not None and sat_val < min_stars:
+                    supabase.table("reminders").update({"sent_status": "cancelled"}).eq(
+                        "id", reminder["id"]
+                    ).execute()
+                    print(
+                        f"Skipped reminder {reminder['id']}: latest feedback satisfaction "
+                        f"{sat_val} < {min_stars}"
+                    )
+                    continue
+
             # 2. Fetch message template
-            template_res = supabase.table("message_templates").select("subject, body, name, rule_type").eq("id", reminder['template_id']).single().execute()
+            template_res = (
+                supabase.table("message_templates")
+                .select("*")
+                .eq("id", reminder["template_id"])
+                .single()
+                .execute()
+            )
             if not template_res.data:
                 raise Exception(f"Template not found for reminder {reminder['id']}")
             template = template_res.data
-            
+
+            if not is_scheduled_followup_template(template):
+                supabase.table("reminders").update({"sent_status": "cancelled"}).eq(
+                    "id", reminder["id"]
+                ).execute()
+                print(
+                    f"Cancelled reminder {reminder['id']}: template is outreach / "
+                    "not a scheduled follow-up (should not be sent as reminder)"
+                )
+                continue
+
             # Get client details (preferred channel and company_id) in one call
-            client_res = supabase.table("clients").select("preferred_contact_channel, company_id, phone").eq("id", reminder['client_id']).single().execute()
+            client_res = supabase.table("clients").select(
+                "preferred_contact_channel, company_id, phone, clicked_google_link"
+            ).eq("id", reminder['client_id']).single().execute()
             if not client_res.data:
                 raise Exception(f"Client not found for client_id {reminder['client_id']}")
-            
+
+            if client_res.data.get("clicked_google_link"):
+                supabase.table("reminders").update({"sent_status": "cancelled"}).eq(
+                    "id", reminder["id"]
+                ).execute()
+                continue
+
             channel = client_res.data.get("preferred_contact_channel")
             client_phone = client_res.data.get("phone")
             if not channel:
@@ -135,11 +188,18 @@ async def process_reminders():
                 if not client_phone:
                     raise Exception("Client phone number is required for WhatsApp channel.")
 
-                template_name = template.get("name")
+                template_name = template.get("name") or ""
                 rule_type = template.get("rule_type")
-                
+                template_type = template.get("template_type")
+                # Outreach ("Erste Nachricht") uses the same Twilio templates as review_requests WhatsApp.
+                is_outreach = template_type == "Outreach" or "Erste Nachricht" in template_name
+
                 content_sid = None
-                if "1. Erinnerung" in template_name and rule_type == "formal":
+                if is_outreach and rule_type == "formal":
+                    content_sid = "HX8991dce65c8ab28adea93518f63f3058"  # whatsapp_outreach_formal_v2
+                elif is_outreach and rule_type == "informal":
+                    content_sid = "HXe61bb8737035c5077500e6263d367afe"  # whatsapp_outreach_informal_v2
+                elif "1. Erinnerung" in template_name and rule_type == "formal":
                     content_sid = "HX363218948b597c323bc628e54be1f9af" # whatsapp_reminder1_formal_v2
                 elif "1. Erinnerung" in template_name and rule_type == "informal":
                     content_sid = "HXd8ffd916c5eddf9506e4f70a86d06fbe" # whatsapp_reminder1_informal_v2
@@ -147,7 +207,7 @@ async def process_reminders():
                     content_sid = "HX3dfb020601addbcbed02fe683439cd9c" # whatsapp_reminder2_formal_v2
                 elif "2. Erinnerung" in template_name and rule_type == "informal":
                     content_sid = "HX695b1182dfcb84dea5ece052e7e35614" # whatsapp_reminder2_informal_v2
-                
+
                 if not content_sid:
                     raise Exception(f"Could not determine Content SID for template '{template_name}' with rule_type '{rule_type}'.")
 

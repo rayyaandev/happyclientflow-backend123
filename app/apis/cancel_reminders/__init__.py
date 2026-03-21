@@ -3,10 +3,12 @@ This API module provides an endpoint to cancel pending reminders for a client.
 It is used after a client submits feedback to stop any further automated reminders from being sent.
 The endpoint uses the Supabase service key to bypass RLS policies.
 """
-from fastapi import APIRouter, HTTPException, Body
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 import databutton as db
 from supabase import create_client, Client
+
+from app.libs.reminder_scheduling import cancel_pending_reminders_for_client
 
 # Supabase connection
 def get_supabase_client() -> Client:
@@ -35,19 +37,10 @@ def cancel_reminders(body: CancelRemindersRequest):
     client_id = body.client_id
     
     try:
-        # Update reminders where client_id matches and status is 'pending'
-        data, count = supabase.from_("reminders") \
-            .update({"sent_status": "cancelled"}) \
-            .eq("client_id", client_id) \
-            .in_("sent_status", ["pending"]) \
-            .execute()
-
-        # The 'execute' method returns a tuple (data, count)
-        # We can check the count to see how many rows were updated
-        
+        updated = cancel_pending_reminders_for_client(supabase, client_id)
         return {
             "message": "Reminders cancelled successfully.",
-            "updated_count": len(data[1]) if data and len(data) > 1 else 0
+            "updated_count": updated,
         }
 
     except Exception as e:
