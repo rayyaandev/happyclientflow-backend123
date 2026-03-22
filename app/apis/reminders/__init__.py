@@ -1,6 +1,7 @@
 """
 This API module is responsible for processing and sending scheduled reminders.
-It is designed to be triggered by a cron job.
+It is designed to be triggered by a cron job. External review CTAs are recorded via
+clients.clicked_google_link (any platform) through create_feedback routes.
 """
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
