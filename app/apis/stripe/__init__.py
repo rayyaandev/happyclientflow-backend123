@@ -211,7 +211,7 @@ async def create_checkout_session(request: CheckoutRequest, user_data: str = Dep
 
         if request.billing_cycle == 'annual':
             # Auto-apply 30% annual discount coupon
-            checkout_params['discounts'] = [{'coupon': 'J8nDaYwq'}]
+            checkout_params['discounts'] = [{'coupon': 'ETk14APh'}]
         else:
             # Allow manual promo code entry for monthly plans
             checkout_params['allow_promotion_codes'] = True
