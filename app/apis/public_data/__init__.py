@@ -48,6 +48,7 @@ class Profile(BaseModel):
     name: str
     profile_type: str
     link: str
+    google_place_id: Optional[str] = None
 
 class Company(BaseModel):
     id: str
@@ -116,15 +117,28 @@ def get_company_info_for_feedback(
                 employees.append(Employee(id=employee_id, full_name=full_name))
                 employee_ids.append(employee_id)
 
-        # 5. Get all profiles for the company (including main_profile flag)
-        profiles_response = supabase.from_("profiles").select("id, name, profile_type, link, main_profile").eq("company_id", company_id).execute()
-        profiles_data = {str(row['id']): Profile(id=str(row['id']), name=row['name'], profile_type=row['profile_type'], link=row['link']) for row in profiles_response.data}
-        
+        def _profile_from_row(row: dict) -> Profile:
+            return Profile(
+                id=str(row["id"]),
+                name=row["name"],
+                profile_type=row["profile_type"],
+                link=row.get("link") or "",
+                google_place_id=row.get("google_place_id"),
+            )
+
+        # 5. Get all profiles for the company (including main_profile and per-profile Place ID)
+        profiles_response = supabase.from_("profiles").select(
+            "id, name, profile_type, link, main_profile, google_place_id"
+        ).eq("company_id", company_id).execute()
+        profiles_data = {
+            str(row["id"]): _profile_from_row(row) for row in profiles_response.data
+        }
+
         # 6. Identify main profiles (profiles marked as main_profile = true)
         main_profiles = [
-            Profile(id=str(row['id']), name=row['name'], profile_type=row['profile_type'], link=row['link'])
-            for row in profiles_response.data 
-            if row.get('main_profile', False)
+            _profile_from_row(row)
+            for row in profiles_response.data
+            if row.get("main_profile", False)
         ]
 
         # 7. Get employee-profile mappings
