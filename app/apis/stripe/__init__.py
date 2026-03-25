@@ -181,10 +181,8 @@ async def create_checkout_session(request: CheckoutRequest, user_data: str = Dep
                 raise HTTPException(status_code=500, detail=f"Stripe price not found for lookup_key: {seat_lookup_key}")
             line_items.append({'price': seat_prices.data[0].id, 'quantity': request.extra_seats})
 
-        # Create checkout session with plan metadata
-        # For annual billing: auto-apply 30% discount coupon
-        # For monthly billing: allow manual promo code entry
-        # (Stripe doesn't allow both discounts and allow_promotion_codes simultaneously)
+        # Create checkout session with plan metadata.
+        # Enable promo-code entry for both monthly and annual checkouts.
         checkout_params = {
             'customer': customer.id,
             'line_items': line_items,
@@ -207,16 +205,8 @@ async def create_checkout_session(request: CheckoutRequest, user_data: str = Dep
                 'billing_cycle': request.billing_cycle,
                 'extra_seats': str(request.extra_seats),
             },
+            'allow_promotion_codes': True,
         }
-
-        if request.billing_cycle == 'annual':
-            # Auto-apply 30% annual discount coupon
-            # Disabled temporary, discount already applied, final amount is correct.
-            # checkout_params['discounts'] = [{'coupon': 'ETk14APh'}]
-            pass
-        else:
-            # Allow manual promo code entry for monthly plans
-            checkout_params['allow_promotion_codes'] = True
 
         session = stripe.checkout.Session.create(**checkout_params)
 
