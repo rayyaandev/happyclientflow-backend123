@@ -238,14 +238,18 @@ def _get_company_owner_email(supabase: Client, company_id: str) -> Optional[str]
         return None
 
 
-def _send_callback_notification(
+def _send_low_rating_notification(
     owner_email: str,
     company_name: str,
     client_id: str,
+    satisfaction: int,
+    callback_requested: Optional[bool],
     callback_note: Optional[str],
+    is_update: bool = False,
 ) -> bool:
     """
-    Sends a SendGrid e-mail to the company owner when a client requests a callback.
+    Sends a SendGrid e-mail to the company owner for low-rating feedback.
+    Includes callback status and note when available.
     Non-critical: returns False on failure instead of raising.
     """
     try:
@@ -254,8 +258,16 @@ def _send_callback_notification(
 
         api_key = db.secrets.get("SENDGRID_API_KEY")
         if not api_key:
-            print("_send_callback_notification: SENDGRID_API_KEY not configured.")
+            print("_send_low_rating_notification: SENDGRID_API_KEY not configured.")
             return False
+
+        callback_label = (
+            "Requested"
+            if callback_requested is True
+            else "Not requested"
+            if callback_requested is False
+            else "Not answered yet"
+        )
 
         note_html = (
             f"<blockquote style='border-left:4px solid #3b82f6;padding:8px 16px;color:#334155;background:#f8fafc'>"
@@ -267,8 +279,8 @@ def _send_callback_notification(
 
         html_body = f"""
         <html><body style="font-family:Inter,sans-serif;color:#0f172a">
-          <h2 style="color:#2563eb">📞 Callback Request from Client Feedback</h2>
-          <p>A client has requested a callback after submitting their 4-star feedback on
+          <h2 style="color:#2563eb">🚨 Low-rating feedback alert</h2>
+          <p>A client submitted a <strong>{satisfaction}-star</strong> feedback on
              <strong>Happy Client Flow</strong>.</p>
           <table style="border-collapse:collapse;width:100%;max-width:500px">
             <tr><td style="padding:6px 12px;font-weight:600;width:140px">Company</td>
@@ -276,15 +288,19 @@ def _send_callback_notification(
             <tr style="background:#f8fafc">
                 <td style="padding:6px 12px;font-weight:600">Client ID</td>
                 <td style="padding:6px 12px;font-family:monospace">{client_id}</td></tr>
+            <tr><td style="padding:6px 12px;font-weight:600">Rating</td>
+                <td style="padding:6px 12px">{satisfaction} / 5</td></tr>
+            <tr style="background:#f8fafc">
+                <td style="padding:6px 12px;font-weight:600">Callback requested</td>
+                <td style="padding:6px 12px">{callback_label}</td></tr>
             <tr><td style="padding:6px 12px;font-weight:600">Submitted</td>
                 <td style="padding:6px 12px">{datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}</td></tr>
           </table>
-          <h3 style="margin-top:20px">Client's additional note:</h3>
+          <h3 style="margin-top:20px">Client note:</h3>
           {note_html}
           <hr style="border:none;border-top:1px solid #e2e8f0;margin:24px 0">
           <p style="color:#64748b;font-size:12px">
-            This notification was sent automatically by Happy Client Flow.<br>
-            Please reach out to the client within 24 hours as promised.
+            This notification was sent automatically by Happy Client Flow.
           </p>
         </body></html>
         """
@@ -292,18 +308,20 @@ def _send_callback_notification(
         message = Mail(
             from_email=From("noreply@happyclientflow.de", "Happy Client Flow"),
             to_emails=owner_email,
-            subject=f"[HCF] Callback requested — {company_name}",
+            subject=(
+                f"[HCF] Low-rating alert ({satisfaction}/5) — {company_name}"
+            ),
             html_content=html_body,
         )
         sg = SendGridAPIClient(api_key)
         response = sg.send(message)
         print(
-            f"_send_callback_notification: sent to {owner_email}, "
+            f"_send_low_rating_notification: sent to {owner_email}, "
             f"status={response.status_code}"
         )
         return response.status_code in (200, 202)
     except Exception as exc:
-        print(f"_send_callback_notification: failed → {exc}")
+        print(f"_send_low_rating_notification: failed → {exc}")
         return False
 
 
@@ -317,12 +335,12 @@ def submit_internal_feedback(
     supabase: Client = Depends(get_supabase_service_client),
 ):
     """
-    Called by the 4-star internal follow-up screen after the main feedback was
+    Called by the <=4-star internal follow-up screen after the main feedback was
     already submitted via /create-feedback.
 
     - Persists callback_requested and callback_note on the feedback row.
-    - If callback_requested is true, sends a SendGrid notification e-mail to
-      the company owner so they can follow up within 24 hours.
+    - Sends an updated SendGrid notification e-mail to the company owner with
+      callback-request status and note.
 
     All errors are non-fatal: the feedback row already exists; this is bonus data.
     """
@@ -344,32 +362,33 @@ def submit_internal_feedback(
         print(f"submit_internal_feedback: could not update feedback row {feedback_id}: {exc}")
         # Non-fatal — continue to try notification
 
-    # 2. Notify company owner if callback was requested
-    if body.callback_requested:
-        try:
-            # Resolve company_id from client
-            client_res = supabase.from_("clients").select("company_id").eq("id", client_id).single().execute()
-            company_id = (client_res.data or {}).get("company_id")
+    # 2. Notify company owner with updated callback status
+    try:
+        client_res = supabase.from_("clients").select("company_id").eq("id", client_id).single().execute()
+        company_id = (client_res.data or {}).get("company_id")
 
-            if company_id:
-                # Get company name
-                company_res = supabase.from_("companies").select("name").eq("id", company_id).single().execute()
-                company_name = (company_res.data or {}).get("name", "Your company")
+        if company_id:
+            company_res = supabase.from_("companies").select("name").eq("id", company_id).single().execute()
+            company_name = (company_res.data or {}).get("name", "Your company")
+            owner_email = _get_company_owner_email(supabase, company_id)
+            feedback_res = supabase.from_("feedback").select("satisfaction").eq("id", feedback_id).single().execute()
+            satisfaction = int((feedback_res.data or {}).get("satisfaction") or 0)
 
-                # Get owner e-mail
-                owner_email = _get_company_owner_email(supabase, company_id)
-                if owner_email:
-                    _send_callback_notification(
-                        owner_email=owner_email,
-                        company_name=company_name,
-                        client_id=client_id,
-                        callback_note=body.callback_note,
-                    )
-                else:
-                    print(f"submit_internal_feedback: no owner email found for company {company_id}")
-            else:
-                print(f"submit_internal_feedback: no company_id on client {client_id}")
-        except Exception as exc:
-            print(f"submit_internal_feedback: notification error: {exc}")
+            if owner_email and satisfaction <= 4:
+                _send_low_rating_notification(
+                    owner_email=owner_email,
+                    company_name=company_name,
+                    client_id=client_id,
+                    satisfaction=satisfaction,
+                    callback_requested=bool(body.callback_requested),
+                    callback_note=body.callback_note,
+                    is_update=True,
+                )
+            elif not owner_email:
+                print(f"submit_internal_feedback: no owner email found for company {company_id}")
+        else:
+            print(f"submit_internal_feedback: no company_id on client {client_id}")
+    except Exception as exc:
+        print(f"submit_internal_feedback: notification error: {exc}")
 
     return SubmitInternalFeedbackResponse(ok=True, message="Internal feedback recorded.")
