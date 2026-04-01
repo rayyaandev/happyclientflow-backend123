@@ -26,6 +26,11 @@ def get_supabase_client() -> Client:
 
 from typing import Optional
 
+
+def build_sender_display_name(company_name: Optional[str]) -> str:
+    company = (company_name or "").strip()
+    return f"{company} via Happy Client Flow" if company else "Happy Client Flow"
+
 def translate_title(raw_title: Optional[str], user_language: str) -> Optional[str]:
     """Normalize and translate courtesy titles based on user language.
     Currently supports German translations.
@@ -154,7 +159,10 @@ async def send_review_request(
             raise HTTPException(status_code=400, detail="Client email is required for email channel.")
 
         message = Mail(
-            from_email=From(sendgrid_from_email, "Happy Client Flow"),
+            from_email=From(
+                sendgrid_from_email,
+                build_sender_display_name(payload.company_name),
+            ),
             to_emails=payload.client_email,
             subject=subject,
             html_content=body
