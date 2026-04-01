@@ -41,6 +41,20 @@ def build_rich_link(url: Optional[str], title: str) -> str:
         f"{title}</a>"
     )
 
+
+def get_link_title(key: str, language: str) -> str:
+    labels = {
+        "review_link": {
+            "de": "Feedback abgeben",
+            "en": "Leave feedback",
+        },
+        "google_review_link": {
+            "de": "Google-Bewertung abgeben",
+            "en": "Leave a Google review",
+        },
+    }
+    return labels.get(key, {}).get(language, labels.get(key, {}).get("en", key))
+
 def get_supabase_client() -> Client:
     supabase_url = db.secrets.get("SUPABASE_URL")
     supabase_key = db.secrets.get("SUPABASE_SERVICE_KEY")
@@ -182,12 +196,18 @@ async def process_reminders():
                 if review_link:
                     body = body.replace(
                         review_link,
-                        build_rich_link(review_link, "Leave feedback"),
+                        build_rich_link(
+                            review_link,
+                            get_link_title("review_link", user_language),
+                        ),
                     )
                 if google_review_link:
                     body = body.replace(
                         google_review_link,
-                        build_rich_link(google_review_link, "Leave a Google review"),
+                        build_rich_link(
+                            google_review_link,
+                            get_link_title("google_review_link", user_language),
+                        ),
                     )
             
             # 4. Send message by channel
