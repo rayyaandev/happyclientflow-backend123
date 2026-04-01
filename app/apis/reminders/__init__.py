@@ -23,6 +23,11 @@ from app.libs.reminder_scheduling import (
 
 router = APIRouter(prefix="/v1/reminders", tags=["reminders"])
 
+
+def build_sender_display_name(company_name: Optional[str]) -> str:
+    company = (company_name or "").strip()
+    return f"{company} via Happy Client Flow" if company else "Happy Client Flow"
+
 def get_supabase_client() -> Client:
     supabase_url = db.secrets.get("SUPABASE_URL")
     supabase_key = db.secrets.get("SUPABASE_SERVICE_KEY")
@@ -167,7 +172,10 @@ async def process_reminders():
                 sendgrid_from_email = "noreply@happyclientflow.de"
 
                 message = Mail(
-                    from_email=From(sendgrid_from_email, "Happy Client Flow"),
+                    from_email=From(
+                        sendgrid_from_email,
+                        build_sender_display_name(reminder.get("company_name")),
+                    ),
                     to_emails=reminder['client_email'],
                     subject=subject,
                     html_content=body
