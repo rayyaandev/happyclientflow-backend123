@@ -11,6 +11,19 @@ from typing import Optional
 
 router = APIRouter(prefix="/v1/referral-invites", tags=["referral_invites"])
 
+
+def build_rich_link(url: Optional[str], title: str) -> str:
+    if not url:
+        return ""
+    safe_url = str(url).strip()
+    if not safe_url:
+        return ""
+    return (
+        f'<a href="{safe_url}" '
+        'style="color:#2563eb;text-decoration:underline;font-weight:600">'
+        f"{title}</a>"
+    )
+
 # --- Supabase Integration ---
 def get_supabase_client() -> Client:
     supabase_url = db.secrets.get("SUPABASE_URL")
@@ -135,6 +148,10 @@ The {payload.company_name} Team"""
     # Replace newlines with HTML line breaks for email rendering
     if body:
         body = body.replace('\n', '<br>')
+        body = body.replace(
+            referral_link,
+            build_rich_link(referral_link, "Join the referral program"),
+        )
 
     # 6. Send email via SendGrid
     sendgrid_api_key = db.secrets.get("SENDGRID_API_KEY")
@@ -257,6 +274,12 @@ async def send_referral_code_email(payload: SendReferralCodePayload):
             subject = subject.replace(key, value or "")
         if body:
             body = body.replace(key, value or "")
+
+    if body:
+        body = body.replace(
+            payload.referral_link,
+            build_rich_link(payload.referral_link, "Open your referral link"),
+        )
     
     # Send email via SendGrid
     sendgrid_api_key = db.secrets.get("SENDGRID_API_KEY")
