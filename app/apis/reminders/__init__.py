@@ -28,6 +28,19 @@ def build_sender_display_name(company_name: Optional[str]) -> str:
     company = (company_name or "").strip()
     return f"{company} via Happy Client Flow" if company else "Happy Client Flow"
 
+
+def build_rich_link(url: Optional[str], title: str) -> str:
+    if not url:
+        return ""
+    safe_url = str(url).strip()
+    if not safe_url:
+        return ""
+    return (
+        f'<a href="{safe_url}" '
+        'style="color:#2563eb;text-decoration:underline;font-weight:600">'
+        f"{title}</a>"
+    )
+
 def get_supabase_client() -> Client:
     supabase_url = db.secrets.get("SUPABASE_URL")
     supabase_key = db.secrets.get("SUPABASE_SERVICE_KEY")
@@ -164,6 +177,18 @@ async def process_reminders():
             # Replace newlines with HTML line breaks for email rendering
             if body:
                 body = body.replace('\n', '<br>')
+                review_link = reminder.get("review_link", "")
+                google_review_link = reminder.get("google_review_link", "")
+                if review_link:
+                    body = body.replace(
+                        review_link,
+                        build_rich_link(review_link, "Leave feedback"),
+                    )
+                if google_review_link:
+                    body = body.replace(
+                        google_review_link,
+                        build_rich_link(google_review_link, "Leave a Google review"),
+                    )
             
             # 4. Send message by channel
             if channel == "Email":

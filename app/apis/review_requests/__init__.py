@@ -31,6 +31,19 @@ def build_sender_display_name(company_name: Optional[str]) -> str:
     company = (company_name or "").strip()
     return f"{company} via Happy Client Flow" if company else "Happy Client Flow"
 
+
+def build_rich_link(url: Optional[str], title: str) -> str:
+    if not url:
+        return ""
+    safe_url = str(url).strip()
+    if not safe_url:
+        return ""
+    return (
+        f'<a href="{safe_url}" '
+        'style="color:#2563eb;text-decoration:underline;font-weight:600">'
+        f"{title}</a>"
+    )
+
 def translate_title(raw_title: Optional[str], user_language: str) -> Optional[str]:
     """Normalize and translate courtesy titles based on user language.
     Currently supports German translations.
@@ -140,6 +153,10 @@ async def send_review_request(
     # Replace newlines with HTML line breaks for email rendering
     if body:
         body = body.replace('\n', '<br>')
+        body = body.replace(
+            payload.review_link,
+            build_rich_link(payload.review_link, "Leave feedback"),
+        )
     else:
         # For SMS/WhatsApp, newlines should be preserved as is.
         pass
