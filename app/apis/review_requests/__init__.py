@@ -44,6 +44,16 @@ def build_rich_link(url: Optional[str], title: str) -> str:
         f"{title}</a>"
     )
 
+
+def get_link_title(key: str, language: str) -> str:
+    labels = {
+        "review_link": {
+            "de": "Feedback abgeben",
+            "en": "Leave feedback",
+        },
+    }
+    return labels.get(key, {}).get(language, labels.get(key, {}).get("en", key))
+
 def translate_title(raw_title: Optional[str], user_language: str) -> Optional[str]:
     """Normalize and translate courtesy titles based on user language.
     Currently supports German translations.
@@ -155,7 +165,10 @@ async def send_review_request(
         body = body.replace('\n', '<br>')
         body = body.replace(
             payload.review_link,
-            build_rich_link(payload.review_link, "Leave feedback"),
+            build_rich_link(
+                payload.review_link,
+                get_link_title("review_link", user_language),
+            ),
         )
     else:
         # For SMS/WhatsApp, newlines should be preserved as is.

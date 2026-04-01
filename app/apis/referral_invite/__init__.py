@@ -24,6 +24,20 @@ def build_rich_link(url: Optional[str], title: str) -> str:
         f"{title}</a>"
     )
 
+
+def get_link_title(key: str, language: str = "en") -> str:
+    labels = {
+        "referral_invite_link": {
+            "de": "Zum Empfehlungsprogramm",
+            "en": "Join the referral program",
+        },
+        "referral_code_link": {
+            "de": "Ihren Empfehlungslink öffnen",
+            "en": "Open your referral link",
+        },
+    }
+    return labels.get(key, {}).get(language, labels.get(key, {}).get("en", key))
+
 # --- Supabase Integration ---
 def get_supabase_client() -> Client:
     supabase_url = db.secrets.get("SUPABASE_URL")
@@ -150,7 +164,10 @@ The {payload.company_name} Team"""
         body = body.replace('\n', '<br>')
         body = body.replace(
             referral_link,
-            build_rich_link(referral_link, "Join the referral program"),
+            build_rich_link(
+                referral_link,
+                get_link_title("referral_invite_link"),
+            ),
         )
 
     # 6. Send email via SendGrid
@@ -278,7 +295,10 @@ async def send_referral_code_email(payload: SendReferralCodePayload):
     if body:
         body = body.replace(
             payload.referral_link,
-            build_rich_link(payload.referral_link, "Open your referral link"),
+            build_rich_link(
+                payload.referral_link,
+                get_link_title("referral_code_link"),
+            ),
         )
     
     # Send email via SendGrid
