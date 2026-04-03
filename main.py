@@ -19,8 +19,20 @@ def get_router_config() -> dict:
     return cfg
 
 
-def is_auth_disabled(router_config: dict, name: str) -> bool:
-    return router_config["routers"][name]["disableAuth"]
+def is_auth_disabled(router_config, name: str) -> bool:
+    """
+    If routers.json is missing or has no entry for this API package, default to
+    disableAuth=True so the router still mounts (avoids silent 404 for new modules).
+    """
+    if not router_config or not isinstance(router_config, dict):
+        return True
+    routers = router_config.get("routers")
+    if not isinstance(routers, dict):
+        return True
+    entry = routers.get(name)
+    if not isinstance(entry, dict):
+        return True
+    return bool(entry.get("disableAuth", True))
 
 
 def import_api_routers() -> APIRouter:
@@ -85,6 +97,7 @@ def create_app() -> FastAPI:
         allow_origins=[
             "http://localhost:5173",
             "http://localhost:3000",
+            "https://frontend-app.ngrok.io",
             "https://happyclientflow-frontend.vercel.app",
             "https://happyclientflow-frontend-nine.vercel.app",
             "https://happyclientflow-frontend-git-feat-l-4eb1b3-rayyaandevs-projects.vercel.app",
