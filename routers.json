@@ -159,6 +159,16 @@
       "name": "payouts",
       "version": "2026-01-30T00:00:00",
       "disableAuth": true
+    },
+    "review_reply": {
+      "name": "review_reply",
+      "version": "2026-04-02T00:00:00",
+      "disableAuth": true
+    },
+    "google_business": {
+      "name": "google_business",
+      "version": "2026-04-02T00:00:00",
+      "disableAuth": true
     }
   }
 }
