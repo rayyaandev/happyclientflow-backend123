@@ -4,9 +4,10 @@ It is designed to be called from the frontend when an anonymous or unauthenticat
 submits feedback. This endpoint uses a service-level Supabase client to bypass
 Row Level Security (RLS) policies, ensuring that feedback can be created by any user.
 
-Reminder lifecycle is handled by /v1/reminders/process (low-star skip, external click,
-non-follow-up templates) and by /mark-external-review-clicked (and legacy
-/mark-google-review-clicked) — not by create-feedback.
+Reminder lifecycle: /v1/reminders/process; /mark-external-review-clicked cancels survey
+reminders. After internal feedback is saved, /create-feedback cancels pending *survey*
+reminders (1./2. Erinnerung chain), then may schedule Google-review follow-ups — so clients
+are not left with four stacked reminders.
 
 4-star internal follow-up:
   POST /submit-internal-feedback  — saves optional callback note/request and
@@ -20,7 +21,14 @@ from supabase import Client, create_client
 import databutton as db
 import datetime
 
-from app.libs.reminder_scheduling import cancel_pending_reminders_for_client
+from app.libs.reminder_scheduling import (
+    cancel_pending_reminders_for_client,
+    cancel_pending_survey_reminders_for_client,
+)
+from app.libs.google_review_reminder_scheduling import (
+    schedule_google_review_followup_reminders_after_feedback,
+    cancel_pending_google_review_followup_reminders,
+)
 
 router = APIRouter()
 
@@ -40,6 +48,10 @@ class CreateFeedbackRequest(BaseModel):
     satisfaction: int
     recommendation: str
     content: FeedbackContent
+
+
+class MarkGoogleReviewPublishedRequest(BaseModel):
+    client_id: str
 
 
 class MarkGoogleReviewClickedRequest(BaseModel):
@@ -79,14 +91,16 @@ def get_supabase_service_client():
 
 def _record_external_review_platform_click(supabase: Client, client_id: str) -> dict:
     """
-    Cancels pending reminders, sets clicked_google_link (any external review CTA),
-    and sets review_status to ReviewComplete.
+    Cancels pending *survey* reminders, sets clicked_google_link (any external review CTA),
+    and sets review_status to ExternalReviewStarted (off-site review opened, not verified).
+    Use ReviewComplete when publication is confirmed (e.g. mark_google_review_published).
+    Google-review follow-up nudges stay pending until google_review_published is set.
     """
-    n = cancel_pending_reminders_for_client(supabase, client_id)
+    n = cancel_pending_survey_reminders_for_client(supabase, client_id)
     supabase.from_("clients").update(
         {
             "clicked_google_link": True,
-            "review_status": "ReviewComplete",
+            "review_status": "ExternalReviewStarted",
         }
     ).eq("id", client_id).execute()
 
@@ -104,7 +118,7 @@ def _record_external_review_platform_click(supabase: Client, client_id: str) -> 
             status_code=404,
             detail="Client not found after update.",
         )
-    if not row.get("clicked_google_link") or row.get("review_status") != "ReviewComplete":
+    if not row.get("clicked_google_link") or row.get("review_status") != "ExternalReviewStarted":
         print(
             f"mark_external_review_clicked: update did not persist for client_id={client_id!r} "
             f"row={row!r}"
@@ -157,6 +171,33 @@ def create_feedback(
                     f"create_feedback: WARNING could not set FeedbackSubmitted for client_id={cid!r}: {upd_err}"
                 )
 
+            try:
+                n_survey = cancel_pending_survey_reminders_for_client(
+                    supabase, cid
+                )
+                if n_survey:
+                    print(
+                        f"create_feedback: cancelled {n_survey} pending survey reminder(s) "
+                        f"for client_id={cid!r} after feedback submitted"
+                    )
+            except Exception as cancel_err:
+                print(
+                    f"create_feedback: WARNING could not cancel survey reminders "
+                    f"for client_id={cid!r}: {cancel_err}"
+                )
+
+            try:
+                schedule_google_review_followup_reminders_after_feedback(
+                    supabase,
+                    client_id=cid,
+                    satisfaction=request.satisfaction,
+                )
+            except Exception as sched_err:
+                print(
+                    f"create_feedback: WARNING could not schedule Google review reminders "
+                    f"for client_id={cid!r}: {sched_err}"
+                )
+
         return response.data[0]
 
     except HTTPException:
@@ -191,6 +232,42 @@ def mark_external_review_clicked(
         raise
     except Exception as e:
         print(f"Error in mark_external_review_clicked for {body.client_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/mark-google-review-published")
+def mark_google_review_published(
+    body: MarkGoogleReviewPublishedRequest,
+    supabase: Client = Depends(get_supabase_service_client),
+):
+    """
+    Marks that the client has (been confirmed to have) published a Google review.
+    Cancels pending google_review_followup reminders.
+
+    Not exposed on the SPA Brain client — call from backend jobs, admin tools, or
+    future server-side integrations only.
+    """
+    client_id = (body.client_id or "").strip()
+    if not client_id:
+        raise HTTPException(status_code=400, detail="client_id is required.")
+    try:
+        now = datetime.datetime.now(datetime.timezone.utc)
+        supabase.from_("clients").update(
+            {
+                "google_review_published": True,
+                "google_review_published_at": now.isoformat(),
+                "review_status": "ReviewComplete",
+            }
+        ).eq("id", client_id).execute()
+        n = cancel_pending_google_review_followup_reminders(supabase, client_id)
+        return {
+            "message": "OK",
+            "pending_google_review_reminders_cancelled": n,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error in mark_google_review_published for {body.client_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

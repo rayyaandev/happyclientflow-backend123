@@ -16,6 +16,7 @@ from twilio.rest import Client as TwilioClient
 import json
 
 from app.libs.reminder_scheduling import (
+    GOOGLE_REVIEW_FOLLOWUP_KIND,
     feedback_high_satisfaction_min,
     is_scheduled_followup_template,
     prefetch_latest_feedback_satisfaction,
@@ -132,12 +133,24 @@ async def process_reminders():
 
             # Get client details (preferred channel and company_id) in one call
             client_res = supabase.table("clients").select(
-                "preferred_contact_channel, company_id, phone, clicked_google_link"
+                "preferred_contact_channel, company_id, phone, clicked_google_link, google_review_published"
             ).eq("id", reminder['client_id']).single().execute()
             if not client_res.data:
                 raise Exception(f"Client not found for client_id {reminder['client_id']}")
 
-            if client_res.data.get("clicked_google_link"):
+            tmpl_kind = (template.get("template_kind") or "").strip().lower()
+            is_google_review_followup = tmpl_kind == GOOGLE_REVIEW_FOLLOWUP_KIND
+
+            if is_google_review_followup and client_res.data.get("google_review_published"):
+                supabase.table("reminders").update({"sent_status": "cancelled"}).eq(
+                    "id", reminder["id"]
+                ).execute()
+                continue
+
+            if (
+                not is_google_review_followup
+                and client_res.data.get("clicked_google_link")
+            ):
                 supabase.table("reminders").update({"sent_status": "cancelled"}).eq(
                     "id", reminder["id"]
                 ).execute()
@@ -261,6 +274,12 @@ async def process_reminders():
                     content_sid = "HX3dfb020601addbcbed02fe683439cd9c" # whatsapp_reminder2_formal_v2
                 elif "2. Erinnerung" in template_name and rule_type == "informal":
                     content_sid = "HX695b1182dfcb84dea5ece052e7e35614" # whatsapp_reminder2_informal_v2
+                elif tmpl_kind == GOOGLE_REVIEW_FOLLOWUP_KIND and rule_type == "formal":
+                    # Reuse survey reminder Twilio shells until dedicated GBP nudge templates exist.
+                    if "2." in template_name or "2nd" in template_name.lower():
+                        content_sid = "HX3dfb020601addbcbed02fe683439cd9c"
+                    else:
+                        content_sid = "HX363218948b597c323bc628e54be1f9af"
 
                 if not content_sid:
                     raise Exception(f"Could not determine Content SID for template '{template_name}' with rule_type '{rule_type}'.")
