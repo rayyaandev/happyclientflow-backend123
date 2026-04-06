@@ -75,6 +75,28 @@ def prefetch_latest_feedback_satisfaction(
 
 # If set on message_templates.template_kind (optional DB column), takes precedence.
 _REMINDER_KIND = "reminder"
+# Nudges to publish on Google after feedback — not part of survey outreach batch.
+GOOGLE_REVIEW_FOLLOWUP_KIND = "google_review_followup"
+
+
+def is_google_review_followup_template_dict(template: Optional[Dict[str, Any]]) -> bool:
+    """
+    Post-feedback Google nudge templates. Prefer template_kind; if NULL (legacy DB),
+    match known DE/EN name patterns so we do not cancel or batch them as survey reminders.
+    """
+    if not template:
+        return False
+    kind = (template.get("template_kind") or "").strip().lower()
+    if kind == GOOGLE_REVIEW_FOLLOWUP_KIND:
+        return True
+    name = (template.get("name") or "").lower()
+    if "bewertungs" in name and "erinnerung" in name:
+        return True
+    if "google review reminder" in name:
+        return True
+    return False
+
+
 _OUTREACH_KINDS = frozenset(
     {"outreach", "invitation", "invite", "first_touch", "survey_invite", "initial"}
 )
@@ -122,7 +144,15 @@ def is_scheduled_followup_template(template: Dict[str, Any]) -> bool:
 
 
 def filter_followup_templates(templates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    return [t for t in templates if is_scheduled_followup_template(t)]
+    """Survey follow-ups only — excludes google_review_followup (scheduled after feedback)."""
+    out: List[Dict[str, Any]] = []
+    for t in templates:
+        if not is_scheduled_followup_template(t):
+            continue
+        if is_google_review_followup_template_dict(t):
+            continue
+        out.append(t)
+    return out
 
 
 def cancel_pending_reminders_for_client(supabase: Client, client_id: str) -> int:
@@ -145,6 +175,46 @@ def cancel_pending_reminders_for_client(supabase: Client, client_id: str) -> int
         "client_id", client_id
     ).eq("sent_status", "pending").execute()
     return len(rows)
+
+
+def cancel_pending_survey_reminders_for_client(supabase: Client, client_id: str) -> int:
+    """
+    Cancel pending reminders whose templates are survey follow-ups (not google_review_followup).
+
+    Used when: (1) internal feedback is submitted — POST /create-feedback clears the 1./2.
+    Erinnerung chain before Google nudges may be scheduled; (2) user opens an external review
+    CTA — survey nudges stop, but Google-review nudges continue until published.
+    """
+    pending = (
+        supabase.from_("reminders")
+        .select("id, template_id")
+        .eq("client_id", client_id)
+        .eq("sent_status", "pending")
+        .execute()
+    )
+    rows = getattr(pending, "data", None) or []
+    cancelled = 0
+    for row in rows:
+        tid = row.get("template_id")
+        if not tid:
+            continue
+        tres = (
+            supabase.from_("message_templates")
+            .select("template_kind, name")
+            .eq("id", tid)
+            .maybe_single()
+            .execute()
+        )
+        raw = getattr(tres, "data", None)
+        if not raw or not isinstance(raw, dict):
+            continue
+        if is_google_review_followup_template_dict(raw):
+            continue
+        supabase.from_("reminders").update({"sent_status": "cancelled"}).eq(
+            "id", row["id"]
+        ).execute()
+        cancelled += 1
+    return cancelled
 
 
 def build_reminder_rows(
