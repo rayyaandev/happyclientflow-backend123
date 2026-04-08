@@ -169,6 +169,11 @@
       "name": "google_business",
       "version": "2026-04-02T00:00:00",
       "disableAuth": true
+    },
+    "review_verification": {
+      "name": "review_verification",
+      "version": "2026-04-08T00:00:00",
+      "disableAuth": true
     }
   }
 }

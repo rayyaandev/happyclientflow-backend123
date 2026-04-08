@@ -14,7 +14,7 @@ Endpoints:
 import requests
 import hashlib
 from datetime import datetime, timedelta, timezone
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 from typing import List, Optional
 import databutton as db
@@ -76,27 +76,29 @@ def transform_apify_review_to_review_data(apify_review: dict) -> ReviewData:
         relative_time_description=apify_review.get("publishAt", "")
     )
 
-async def fetch_reviews_from_apify(place_id: str) -> List[ReviewData]:
+async def fetch_reviews_from_apify(
+    place_id: str, *, force_refresh: bool = False
+) -> List[ReviewData]:
     """
     Fetch reviews from Apify Google Maps Reviews scraper.
-    Uses 24-hour caching to minimize API calls.
+    Uses 24-hour caching to minimize API calls (bypass with force_refresh=True).
     """
     cache_key = get_reviews_cache_key(place_id)
     ttl = timedelta(hours=24)
-    
-    # 1. Check for cached data
-    try:
-        cached_entry = db.storage.json.get(cache_key)
-        cached_timestamp = datetime.fromisoformat(cached_entry["timestamp"])
-        
-        if datetime.now(timezone.utc) - cached_timestamp < ttl:
-            print(f"[CACHE HIT] Returning cached reviews for place_id: {place_id}")
-            cached_reviews = cached_entry.get("reviews", [])
-            # Transform cached reviews back to ReviewData objects
-            return [ReviewData(**review) for review in cached_reviews]
-    except (FileNotFoundError, KeyError, TypeError):
-        # Cache miss
-        print(f"[CACHE MISS] Fetching fresh reviews for place_id: {place_id}")
+
+    if not force_refresh:
+        try:
+            cached_entry = db.storage.json.get(cache_key)
+            cached_timestamp = datetime.fromisoformat(cached_entry["timestamp"])
+
+            if datetime.now(timezone.utc) - cached_timestamp < ttl:
+                print(f"[CACHE HIT] Returning cached reviews for place_id: {place_id}")
+                cached_reviews = cached_entry.get("reviews", [])
+                return [ReviewData(**review) for review in cached_reviews]
+        except (FileNotFoundError, KeyError, TypeError):
+            print(f"[CACHE MISS] Fetching fresh reviews for place_id: {place_id}")
+    else:
+        print(f"[CACHE BYPASS] Fresh Apify fetch for place_id: {place_id}")
     
     # 2. Fetch from Apify
     try:
@@ -155,7 +157,10 @@ async def fetch_reviews_from_apify(place_id: str) -> List[ReviewData]:
 # =====================
 @router.get("/details/{place_id}")
 async def get_place_details(
-    place_id: str
+    place_id: str,
+    force_refresh: bool = Query(
+        False, description="Skip 24h Apify cache (e.g. review verification)"
+    ),
 ) -> PlaceDetailsResponse:
     """
     Fetch detailed information about a place using Google Places API.
@@ -214,8 +219,9 @@ async def get_place_details(
         
         result = data.get("result", {})
         
-        # Fetch reviews from Apify (with caching)
-        reviews = await fetch_reviews_from_apify(place_id)
+        reviews = await fetch_reviews_from_apify(
+            place_id, force_refresh=force_refresh
+        )
         print(f"[REVIEWS] Fetched {len(reviews)} reviews for place_id: {place_id}")
         
         # Return structured response
