@@ -2,7 +2,7 @@
 This API module handles scraping of ProvenExpert profile reviews using Apify.
 """
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import databutton as db
 from apify_client import ApifyClientAsync
 import hashlib
@@ -22,6 +22,7 @@ router = APIRouter()
 class ScrapeRequest(BaseModel):
     url: str
     page: int = 1
+    force_refresh: bool = Field(False, description="Bypass 24h scrape cache")
 
 class PaginationMeta(BaseModel):
     current_page: int
@@ -55,46 +56,36 @@ async def profile_provenexpert(request: ScrapeRequest):
     cache_key = get_cache_key(request.url, request.page)
     ttl = timedelta(hours=24)
 
-    # 1. Check for cached data
-    try:
-        cached_entry = db.storage.json.get(cache_key)
-        cached_timestamp = datetime.fromisoformat(cached_entry["timestamp"])
-        
-        if datetime.now(timezone.utc) - cached_timestamp < ttl:
-            # Return all reviews from cached data (flattened)
-            cached_data = cached_entry["data"]
-            if cached_data and len(cached_data) > 0:
-                scraped_data = cached_data[0]
-                
-                # Get all reviews (already flattened in cache)
-                all_reviews = scraped_data.get("reviews", [])
-                
-                # IMPORTANT: Only count reviews we actually scraped (exclude external sources shown on the page)
-                only_scraped_count = len(all_reviews)
-                
-                # Create response data with all reviews
-                response_data = [{
-                    "url": scraped_data.get("url", request.url),
-                    "summaryScore": scraped_data.get("summaryScore", ""),
-                    "summaryReviewsCount": str(only_scraped_count),
-                    "reviews": all_reviews
-                }]
-                
-                pagination_meta = PaginationMeta(
-                    current_page=1,
-                    has_next_page=False,  # No backend pagination
-                    total_pages=1,
-                    total_reviews=len(all_reviews)
-                )
-                
-                return ScrapeResponse(
-                    data=response_data,
-                    message="Data retrieved from cache.",
-                    pagination=pagination_meta
-                )
-    except (FileNotFoundError, KeyError, TypeError):
-        # Cache miss if file not found, or entry is malformed
-        pass
+    if not request.force_refresh:
+        try:
+            cached_entry = db.storage.json.get(cache_key)
+            cached_timestamp = datetime.fromisoformat(cached_entry["timestamp"])
+
+            if datetime.now(timezone.utc) - cached_timestamp < ttl:
+                cached_data = cached_entry["data"]
+                if cached_data and len(cached_data) > 0:
+                    scraped_data = cached_data[0]
+                    all_reviews = scraped_data.get("reviews", [])
+                    only_scraped_count = len(all_reviews)
+                    response_data = [{
+                        "url": scraped_data.get("url", request.url),
+                        "summaryScore": scraped_data.get("summaryScore", ""),
+                        "summaryReviewsCount": str(only_scraped_count),
+                        "reviews": all_reviews
+                    }]
+                    pagination_meta = PaginationMeta(
+                        current_page=1,
+                        has_next_page=False,
+                        total_pages=1,
+                        total_reviews=len(all_reviews)
+                    )
+                    return ScrapeResponse(
+                        data=response_data,
+                        message="Data retrieved from cache.",
+                        pagination=pagination_meta
+                    )
+        except (FileNotFoundError, KeyError, TypeError):
+            pass
 
     # 2. Scrape data using Apify if not cached or cache is stale
     try:

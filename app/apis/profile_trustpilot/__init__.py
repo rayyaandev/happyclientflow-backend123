@@ -2,7 +2,7 @@
 This API module handles scraping of Trustpilot profile reviews using Apify.
 """
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import databutton as db
 from apify_client import ApifyClientAsync
 import hashlib
@@ -23,6 +23,7 @@ router = APIRouter()
 class ScrapeRequest(BaseModel):
     url: str
     page: int = 1
+    force_refresh: bool = Field(False, description="Bypass 24h scrape cache")
 
 
 class PaginationMeta(BaseModel):
@@ -115,50 +116,47 @@ async def profile_trustpilot(request: ScrapeRequest):
     cache_key = get_cache_key(normalized_url, request.page)
     ttl = timedelta(hours=24)
 
-    # 1. Try returning from cache
-    try:
-        cached_entry = db.storage.json.get(cache_key)
-        cached_timestamp = datetime.fromisoformat(cached_entry["timestamp"])
-        if datetime.now(timezone.utc) - cached_timestamp < ttl:
-            cached_data = cached_entry["data"]
-            if cached_data and len(cached_data) > 0:
-                scraped_data = cached_data[0]
-                all_reviews = scraped_data.get("reviews", [])
-                
-                # Convert reviews to TrustpilotReview format
-                formatted_reviews = []
-                for review in all_reviews:
-                    formatted_reviews.append(TrustpilotReview(
-                        author=review.get("author", ""),
-                        rating=review.get("rating", 0),
-                        date=review.get("date", ""),
-                        title=review.get("title", ""),
-                        content=review.get("content", "")
-                    ))
-                
-                response_data = [
-                    ScrapedProfile(
-                        url=scraped_data.get("url", request.url),
-                        name=scraped_data.get("name"),
-                        totalReviews=scraped_data.get("totalReviews"),
-                        rating=scraped_data.get("rating"),
-                        reviewsScraped=len(formatted_reviews),
-                        reviews=formatted_reviews,
+    if not request.force_refresh:
+        try:
+            cached_entry = db.storage.json.get(cache_key)
+            cached_timestamp = datetime.fromisoformat(cached_entry["timestamp"])
+            if datetime.now(timezone.utc) - cached_timestamp < ttl:
+                cached_data = cached_entry["data"]
+                if cached_data and len(cached_data) > 0:
+                    scraped_data = cached_data[0]
+                    all_reviews = scraped_data.get("reviews", [])
+                    formatted_reviews = []
+                    for review in all_reviews:
+                        formatted_reviews.append(TrustpilotReview(
+                            author=review.get("author", ""),
+                            rating=review.get("rating", 0),
+                            date=review.get("date", ""),
+                            title=review.get("title", ""),
+                            content=review.get("content", "")
+                        ))
+                    response_data = [
+                        ScrapedProfile(
+                            url=scraped_data.get("url", request.url),
+                            name=scraped_data.get("name"),
+                            totalReviews=scraped_data.get("totalReviews"),
+                            rating=scraped_data.get("rating"),
+                            reviewsScraped=len(formatted_reviews),
+                            reviews=formatted_reviews,
+                        )
+                    ]
+                    pagination_meta = PaginationMeta(
+                        current_page=request.page,
+                        has_next_page=False,
+                        total_pages=1,
+                        total_reviews=scraped_data.get("totalReviews") or len(all_reviews),
                     )
-                ]
-                pagination_meta = PaginationMeta(
-                    current_page=request.page,
-                    has_next_page=False,
-                    total_pages=1,
-                    total_reviews=scraped_data.get("totalReviews") or len(all_reviews),
-                )
-                return ScrapeResponse(
-                    data=response_data,
-                    message="Data retrieved from cache.",
-                    pagination=pagination_meta,
-                )
-    except Exception:
-        pass
+                    return ScrapeResponse(
+                        data=response_data,
+                        message="Data retrieved from cache.",
+                        pagination=pagination_meta,
+                    )
+        except Exception:
+            pass
 
     # 2. Scrape using Apify
     try:

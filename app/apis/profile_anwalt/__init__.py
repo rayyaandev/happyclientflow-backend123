@@ -2,7 +2,7 @@
 This API module handles scraping of anwalt.de profile reviews using Apify.
 """
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import databutton as db
 from apify_client import ApifyClientAsync
 from firecrawl import FirecrawlApp
@@ -23,6 +23,7 @@ router = APIRouter()
 class ScrapeRequest(BaseModel):
     url: str
     page: int = 1
+    force_refresh: bool = Field(False, description="Bypass 24h scrape cache")
 
 class PaginationMeta(BaseModel):
     current_page: int
@@ -61,20 +62,18 @@ async def profile_anwalt(request: ScrapeRequest):
     cache_key = get_cache_key(request.url, request.page)
     ttl = timedelta(hours=24)
 
-    # 1. Check for cached data
-    try:
-        cached_entry = db.storage.json.get(cache_key)
-        cached_timestamp = datetime.fromisoformat(cached_entry["timestamp"])
-        
-        if datetime.now(timezone.utc) - cached_timestamp < ttl:
-            return ScrapeResponse(
-                data=cached_entry["data"], 
-                message="Data retrieved from cache.",
-                pagination=cached_entry["pagination"]
-            )
-    except (FileNotFoundError, KeyError, TypeError):
-        # Cache miss if file not found, or entry is malformed
-        pass
+    if not request.force_refresh:
+        try:
+            cached_entry = db.storage.json.get(cache_key)
+            cached_timestamp = datetime.fromisoformat(cached_entry["timestamp"])
+            if datetime.now(timezone.utc) - cached_timestamp < ttl:
+                return ScrapeResponse(
+                    data=cached_entry["data"],
+                    message="Data retrieved from cache.",
+                    pagination=cached_entry["pagination"]
+                )
+        except (FileNotFoundError, KeyError, TypeError):
+            pass
 
     # 2. Scrape data using Apify if not cached or cache is stale
     try:

@@ -14,6 +14,8 @@ are not left with four stacked reminders.
   sends a SendGrid notification e-mail to the company owner.
 """
 
+import threading
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from typing import List, Optional
@@ -48,6 +50,14 @@ class CreateFeedbackRequest(BaseModel):
     satisfaction: int
     recommendation: str
     content: FeedbackContent
+    reviewer_name_hint: Optional[str] = None
+
+
+class AttachReviewDraftRequest(BaseModel):
+    feedback_id: str
+    client_id: str
+    review_draft_text: str
+    reviewer_name_hint: Optional[str] = None
 
 
 class MarkGoogleReviewPublishedRequest(BaseModel):
@@ -97,10 +107,12 @@ def _record_external_review_platform_click(supabase: Client, client_id: str) -> 
     Google-review follow-up nudges stay pending until google_review_published is set.
     """
     n = cancel_pending_survey_reminders_for_client(supabase, client_id)
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
     supabase.from_("clients").update(
         {
             "clicked_google_link": True,
             "review_status": "ExternalReviewStarted",
+            "external_review_clicked_at": now,
         }
     ).eq("id", client_id).execute()
 
@@ -151,6 +163,9 @@ def create_feedback(
             "recommendation": request.recommendation,
             "content": request.content.model_dump(),
         }
+        hint = (request.reviewer_name_hint or "").strip()
+        if hint:
+            feedback_insert_data["reviewer_name_hint"] = hint
 
         response = supabase.from_("feedback").insert(feedback_insert_data).execute()
 
@@ -207,6 +222,36 @@ def create_feedback(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/attach-review-draft")
+def attach_review_draft(
+    body: AttachReviewDraftRequest,
+    supabase: Client = Depends(get_supabase_service_client),
+):
+    """Persist AI-generated review text for scraper-based verification (after /create-feedback)."""
+    draft = (body.review_draft_text or "").strip()
+    if not draft:
+        raise HTTPException(status_code=400, detail="review_draft_text is required.")
+    fid = (body.feedback_id or "").strip()
+    cid = (body.client_id or "").strip()
+    if not fid or not cid:
+        raise HTTPException(status_code=400, detail="feedback_id and client_id are required.")
+    chk = (
+        supabase.from_("feedback")
+        .select("id")
+        .eq("id", fid)
+        .eq("client_id", cid)
+        .limit(1)
+        .execute()
+    )
+    if not (getattr(chk, "data", None) or []):
+        raise HTTPException(status_code=404, detail="Feedback not found for this client.")
+    upd: dict = {"review_draft_text": draft}
+    if body.reviewer_name_hint is not None:
+        upd["reviewer_name_hint"] = (body.reviewer_name_hint or "").strip() or None
+    supabase.from_("feedback").update(upd).eq("id", fid).execute()
+    return {"ok": True}
+
+
 @router.post("/mark-external-review-clicked")
 def mark_external_review_clicked(
     body: MarkExternalReviewClickedRequest,
@@ -227,7 +272,23 @@ def mark_external_review_clicked(
                 f"profile_type={body.profile_type!r}"
             )
 
-        return _record_external_review_platform_click(supabase, client_id)
+        result = _record_external_review_platform_click(supabase, client_id)
+        pt = (body.profile_type or "").strip() or None
+
+        def _run_verify_bg() -> None:
+            try:
+                from app.libs.review_verification import (
+                    run_external_review_verification_sync,
+                )
+
+                run_external_review_verification_sync(client_id, pt)
+            except Exception as e:
+                print(
+                    f"mark_external_review_clicked: review_verification background error: {e}"
+                )
+
+        threading.Thread(target=_run_verify_bg, daemon=True).start()
+        return result
     except HTTPException:
         raise
     except Exception as e:
