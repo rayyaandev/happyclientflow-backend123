@@ -18,7 +18,7 @@ import threading
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List, Optional, Tuple
 from supabase import Client, create_client
 import databutton as db
 import datetime
@@ -357,23 +357,30 @@ def mark_google_review_clicked(
 # Helpers for the 4-star internal follow-up
 # ---------------------------------------------------------------------------
 
-def _get_company_owner_email(supabase: Client, company_id: str) -> Optional[str]:
+def _get_company_owner_email_and_language(
+    supabase: Client, company_id: str
+) -> Tuple[Optional[str], str]:
     """
-    Returns the e-mail address of the company owner, or None on any error.
-    Pattern mirrors client_consent API.
+    Returns (owner_email, language) for the company owner.
+    `language` is the user's `users.language` (typically 'de' or 'en'); defaults to 'de'.
     """
     try:
         company_res = supabase.from_("companies").select("owner_id, name").eq("id", company_id).single().execute()
         if not company_res.data:
-            return None
+            return None, "de"
         owner_id = company_res.data.get("owner_id")
         if not owner_id:
-            return None
-        user_res = supabase.from_("users").select("email").eq("id", owner_id).single().execute()
-        return (user_res.data or {}).get("email")
+            return None, "de"
+        user_res = supabase.from_("users").select("email, language").eq("id", owner_id).single().execute()
+        data = user_res.data or {}
+        email = data.get("email")
+        lang = (data.get("language") or "de").strip().lower()
+        if lang not in ("de", "en"):
+            lang = "de"
+        return email, lang
     except Exception as exc:
-        print(f"_get_company_owner_email: could not look up owner for company {company_id}: {exc}")
-        return None
+        print(f"_get_company_owner_email_and_language: could not look up owner for company {company_id}: {exc}")
+        return None, "de"
 
 
 def _send_low_rating_notification(
@@ -384,10 +391,12 @@ def _send_low_rating_notification(
     callback_requested: Optional[bool],
     callback_note: Optional[str],
     is_update: bool = False,
+    language: str = "de",
 ) -> bool:
     """
     Sends a SendGrid e-mail to the company owner for low-rating feedback.
     Includes callback status and note when available.
+    `language`: 'de' or 'en' (from company owner's users.language).
     Non-critical: returns False on failure instead of raising.
     """
     try:
@@ -399,23 +408,70 @@ def _send_low_rating_notification(
             print("_send_low_rating_notification: SENDGRID_API_KEY not configured.")
             return False
 
-        callback_label = (
-            "Requested"
-            if callback_requested is True
-            else "Not requested"
-            if callback_requested is False
-            else "Not answered yet"
-        )
+        lang = (language or "de").strip().lower()
+        if lang not in ("de", "en"):
+            lang = "de"
+
+        if lang == "de":
+            callback_label = (
+                "Ja"
+                if callback_requested is True
+                else "Nein"
+                if callback_requested is False
+                else "Noch keine Angabe"
+            )
+            note_empty = "<p style='color:#94a3b8'><em>(keine zusätzliche Nachricht)</em></p>"
+        else:
+            callback_label = (
+                "Requested"
+                if callback_requested is True
+                else "Not requested"
+                if callback_requested is False
+                else "Not answered yet"
+            )
+            note_empty = "<p style='color:#94a3b8'><em>(no additional note)</em></p>"
 
         note_html = (
             f"<blockquote style='border-left:4px solid #3b82f6;padding:8px 16px;color:#334155;background:#f8fafc'>"
             f"{callback_note.replace(chr(10), '<br>')}"
             f"</blockquote>"
             if callback_note
-            else "<p style='color:#94a3b8'><em>(no additional note)</em></p>"
+            else note_empty
         )
 
-        html_body = f"""
+        ts = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+
+        if lang == "de":
+            html_body = f"""
+        <html><body style="font-family:Inter,sans-serif;color:#0f172a">
+          <h2 style="color:#2563eb">🚨 Hinweis: niedrige Bewertung</h2>
+          <p>Ein Kunde hat eine Bewertung mit <strong>{satisfaction} von 5 Sternen</strong> über
+             <strong>Happy Client Flow</strong> abgegeben.</p>
+          <table style="border-collapse:collapse;width:100%;max-width:500px">
+            <tr><td style="padding:6px 12px;font-weight:600;width:140px">Unternehmen</td>
+                <td style="padding:6px 12px">{company_name}</td></tr>
+            <tr style="background:#f8fafc">
+                <td style="padding:6px 12px;font-weight:600">Kunden-ID</td>
+                <td style="padding:6px 12px;font-family:monospace">{client_id}</td></tr>
+            <tr><td style="padding:6px 12px;font-weight:600">Bewertung</td>
+                <td style="padding:6px 12px">{satisfaction} / 5</td></tr>
+            <tr style="background:#f8fafc">
+                <td style="padding:6px 12px;font-weight:600">Rückruf gewünscht</td>
+                <td style="padding:6px 12px">{callback_label}</td></tr>
+            <tr><td style="padding:6px 12px;font-weight:600">Eingegangen</td>
+                <td style="padding:6px 12px">{ts}</td></tr>
+          </table>
+          <h3 style="margin-top:20px">Nachricht des Kunden:</h3>
+          {note_html}
+          <hr style="border:none;border-top:1px solid #e2e8f0;margin:24px 0">
+          <p style="color:#64748b;font-size:12px">
+            Diese Benachrichtigung wurde automatisch von Happy Client Flow gesendet.
+          </p>
+        </body></html>
+        """
+            subject = f"[HCF] Niedrige Bewertung ({satisfaction}/5) — {company_name}"
+        else:
+            html_body = f"""
         <html><body style="font-family:Inter,sans-serif;color:#0f172a">
           <h2 style="color:#2563eb">🚨 Low-rating feedback alert</h2>
           <p>A client submitted a <strong>{satisfaction}-star</strong> feedback on
@@ -432,7 +488,7 @@ def _send_low_rating_notification(
                 <td style="padding:6px 12px;font-weight:600">Callback requested</td>
                 <td style="padding:6px 12px">{callback_label}</td></tr>
             <tr><td style="padding:6px 12px;font-weight:600">Submitted</td>
-                <td style="padding:6px 12px">{datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}</td></tr>
+                <td style="padding:6px 12px">{ts}</td></tr>
           </table>
           <h3 style="margin-top:20px">Client note:</h3>
           {note_html}
@@ -442,13 +498,12 @@ def _send_low_rating_notification(
           </p>
         </body></html>
         """
+            subject = f"[HCF] Low-rating alert ({satisfaction}/5) — {company_name}"
 
         message = Mail(
             from_email=From("noreply@happyclientflow.de", "Happy Client Flow"),
             to_emails=owner_email,
-            subject=(
-                f"[HCF] Low-rating alert ({satisfaction}/5) — {company_name}"
-            ),
+            subject=subject,
             html_content=html_body,
         )
         sg = SendGridAPIClient(api_key)
@@ -508,7 +563,7 @@ def submit_internal_feedback(
         if company_id:
             company_res = supabase.from_("companies").select("name").eq("id", company_id).single().execute()
             company_name = (company_res.data or {}).get("name", "Your company")
-            owner_email = _get_company_owner_email(supabase, company_id)
+            owner_email, owner_language = _get_company_owner_email_and_language(supabase, company_id)
             feedback_res = supabase.from_("feedback").select("satisfaction").eq("id", feedback_id).single().execute()
             satisfaction = int((feedback_res.data or {}).get("satisfaction") or 0)
 
@@ -521,6 +576,7 @@ def submit_internal_feedback(
                     callback_requested=bool(body.callback_requested),
                     callback_note=body.callback_note,
                     is_update=True,
+                    language=owner_language,
                 )
             elif not owner_email:
                 print(f"submit_internal_feedback: no owner email found for company {company_id}")
