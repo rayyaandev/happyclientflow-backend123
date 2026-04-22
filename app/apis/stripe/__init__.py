@@ -189,7 +189,12 @@ async def create_checkout_session(request: CheckoutRequest, user_data: str = Dep
             'mode': 'subscription',
             'success_url': request.success_url,
             'cancel_url': request.cancel_url,
-            'automatic_tax': {'enabled': False},
+            # Ensure VAT/sales tax is computed and added by Stripe at checkout.
+            'automatic_tax': {'enabled': True},
+            # Collect billing address to let Stripe determine tax jurisdiction.
+            'billing_address_collection': 'required',
+            # Let business customers provide VAT ID where applicable.
+            'tax_id_collection': {'enabled': True},
             'customer_update': {'address': 'auto'},
             'subscription_data': {
                 'metadata': {
