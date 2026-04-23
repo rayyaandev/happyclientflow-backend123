@@ -195,7 +195,8 @@ async def create_checkout_session(request: CheckoutRequest, user_data: str = Dep
             'billing_address_collection': 'required',
             # Let business customers provide VAT ID where applicable.
             'tax_id_collection': {'enabled': True},
-            'customer_update': {'address': 'auto'},
+            # Stripe requires name updates when tax_id_collection is on for existing customers.
+            'customer_update': {'address': 'auto', 'name': 'auto'},
             'subscription_data': {
                 'metadata': {
                     'company_id': request.company_id,
