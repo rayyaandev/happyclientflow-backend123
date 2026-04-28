@@ -3,7 +3,7 @@
 # Sends customer inquiries to service@happyclientflow.de via SendGrid.
 
 import databutton as db
-from fastapi import APIRouter, HTTPException, Body, Form, File, UploadFile, Depends
+from fastapi import APIRouter, HTTPException, Form, File, UploadFile, Depends
 from pydantic import BaseModel, EmailStr
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Attachment, FileContent, FileName, FileType, Disposition
@@ -90,10 +90,12 @@ def _send_support_ticket_email(ticket_id: str, user_name: str, user_email: Email
     )
     
     # Add attachment if provided
-    if attachment and attachment.size > 0:
+    if attachment:
         try:
             # Read file content
             file_content = attachment.file.read()
+            if not file_content:
+                raise ValueError("Attachment is empty")
             encoded_file = base64.b64encode(file_content).decode()
             
             # Create attachment
@@ -140,9 +142,15 @@ async def submit_support_ticket(
     # Note: current_user is just the user ID string, we don't have company info in JWT
     print(f"[AUTH] Support ticket submission for user: {current_user}")
     
-    # Validate attachment size if provided (limit to 10MB)
-    if attachment and attachment.size > 10485760:  # 10MB
-        raise HTTPException(status_code=400, detail="Attachment size must be less than 10MB")
+    # Validate attachment size if provided (limit to 10MB).
+    # UploadFile.size is not always populated, so measure safely from the stream.
+    if attachment:
+        try:
+            file_content = await attachment.read()
+            if len(file_content) > 10485760:  # 10MB
+                raise HTTPException(status_code=400, detail="Attachment size must be less than 10MB")
+        finally:
+            await attachment.seek(0)
     
     # Generate a simple ticket ID for tracking
     ticket_id = f"HCF-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}"
