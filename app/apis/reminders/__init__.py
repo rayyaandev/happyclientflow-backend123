@@ -7,7 +7,6 @@ from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 import databutton as db
 from sendgrid import SendGridAPIClient
-from sendgrid.helpers.mail import Mail, From
 from supabase import create_client, Client
 from app.env import mode, Mode
 import datetime
@@ -21,6 +20,7 @@ from app.libs.reminder_scheduling import (
     is_scheduled_followup_template,
     prefetch_latest_feedback_satisfaction,
 )
+from app.libs.email_builder import build_sendgrid_mail
 
 router = APIRouter(prefix="/v1/reminders", tags=["reminders"])
 
@@ -201,6 +201,8 @@ async def process_reminders():
                 if subject: subject = subject.replace(key, replace_with)
                 if body: body = body.replace(key, replace_with)
             
+            plain_text_body = body or ""
+
             # Replace newlines with HTML line breaks for email rendering
             if body:
                 body = body.replace('\n', '<br>')
@@ -229,14 +231,13 @@ async def process_reminders():
                 sendgrid_api_key = db.secrets.get("SENDGRID_API_KEY")
                 sendgrid_from_email = "noreply@happyclientflow.de"
 
-                message = Mail(
-                    from_email=From(
-                        sendgrid_from_email,
-                        build_sender_display_name(reminder.get("company_name")),
-                    ),
+                message = build_sendgrid_mail(
+                    from_email=sendgrid_from_email,
+                    from_name=build_sender_display_name(reminder.get("company_name")),
                     to_emails=reminder['client_email'],
-                    subject=subject,
-                    html_content=body
+                    subject=subject or "",
+                    html_content=body or "",
+                    plain_text_content=plain_text_body,
                 )
                 sg = SendGridAPIClient(sendgrid_api_key)
                 response = sg.send(message)

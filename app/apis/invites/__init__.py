@@ -8,12 +8,12 @@ import uuid
 import datetime
 from typing import List, Optional
 from sendgrid import SendGridAPIClient
-from sendgrid.helpers.mail import Mail, From
 from app.env import mode, Mode # Import current environment mode
 from supabase import create_client, Client
 from app.libs.auth import get_user_from_request # Assuming this handles user auth
 from app.libs.auth_utils import require_admin  # Role-based access control
 from app.libs.pricing_config import resolve_plan_from_lookup_key, PLANS
+from app.libs.email_builder import build_sendgrid_mail
 
 # Path for the registration page, ensure it matches frontend routing
 REGISTER_PATH = "register" # e.g., app.com/register?token=xyz
@@ -136,11 +136,24 @@ def _send_actual_invitation_email(email_to: EmailStr, role: str, token: str, com
         <p>Best regards,<br/>The {effective_company_name} Team</p>
         """
 
-    message = Mail(
-        from_email=From(sendgrid_from_email, "Happy Client Flow"),
+    plain_text_body = (
+        message_body
+        .replace("<br/>", "\n")
+        .replace("<br>", "\n")
+        .replace("<p>", "")
+        .replace("</p>", "\n")
+        .replace("<a href=\"", "")
+        .replace("\">", " ")
+        .replace("</a>", "")
+    )
+
+    message = build_sendgrid_mail(
+        from_email=sendgrid_from_email,
+        from_name="Happy Client Flow",
         to_emails=email_to,
         subject=invite_subject,
-        html_content=message_body
+        html_content=message_body,
+        plain_text_content=plain_text_body,
     )
     try:
         sg = SendGridAPIClient(sendgrid_api_key)

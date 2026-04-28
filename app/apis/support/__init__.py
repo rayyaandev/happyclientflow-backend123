@@ -6,9 +6,10 @@ import databutton as db
 from fastapi import APIRouter, HTTPException, Body, Form, File, UploadFile, Depends
 from pydantic import BaseModel, EmailStr
 from sendgrid import SendGridAPIClient
-from sendgrid.helpers.mail import Mail, Attachment, FileContent, FileName, FileType, Disposition
+from sendgrid.helpers.mail import Attachment, FileContent, FileName, FileType, Disposition
 from app.env import mode, Mode
 from app.libs.auth import require_auth
+from app.libs.email_builder import build_sendgrid_mail
 import base64
 from typing import Optional
 import datetime
@@ -69,12 +70,23 @@ def _send_support_ticket_email(ticket_id: str, user_name: str, user_email: Email
     </p>
     """
     
+    plain_text_body = (
+        f"New Support Ticket\n"
+        f"From: {user_name} ({user_email})\n"
+        f"Subject: {subject}\n"
+        f"Submitted: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}\n\n"
+        f"Message:\n{message}\n\n"
+        f"This support ticket was submitted via Happy Client Flow support form.\n"
+        f"Please respond to: {user_email}"
+    )
+
     # Create the email message
-    mail_message = Mail(
+    mail_message = build_sendgrid_mail(
         from_email=sendgrid_from_email,
         to_emails=support_email,
         subject=email_subject,
-        html_content=email_body
+        html_content=email_body,
+        plain_text_content=plain_text_body,
     )
     
     # Add attachment if provided
