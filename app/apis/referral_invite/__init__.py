@@ -5,9 +5,9 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, EmailStr
 import databutton as db
 from sendgrid import SendGridAPIClient
-from sendgrid.helpers.mail import Mail, From
 from supabase import create_client, Client
 from typing import Optional
+from app.libs.email_builder import build_sendgrid_mail
 
 router = APIRouter(prefix="/v1/referral-invites", tags=["referral_invites"])
 
@@ -159,6 +159,8 @@ The {payload.company_name} Team"""
         if body:
             body = body.replace(key, replace_with)
 
+    plain_text_body = body or ""
+
     # Replace newlines with HTML line breaks for email rendering
     if body:
         body = body.replace('\n', '<br>')
@@ -177,11 +179,13 @@ The {payload.company_name} Team"""
     if not sendgrid_api_key:
         raise HTTPException(status_code=500, detail="SendGrid configuration is missing.")
 
-    message = Mail(
-        from_email=From(sendgrid_from_email, "Happy Client Flow"),
+    message = build_sendgrid_mail(
+        from_email=sendgrid_from_email,
+        from_name="Happy Client Flow",
         to_emails=payload.client_email,
-        subject=subject,
-        html_content=body
+        subject=subject or "",
+        html_content=body or "",
+        plain_text_content=plain_text_body,
     )
 
     try:
@@ -292,6 +296,8 @@ async def send_referral_code_email(payload: SendReferralCodePayload):
         if body:
             body = body.replace(key, value or "")
 
+    plain_text_body = body or ""
+
     if body:
         body = body.replace(
             payload.referral_link,
@@ -308,11 +314,13 @@ async def send_referral_code_email(payload: SendReferralCodePayload):
     if not sendgrid_api_key:
         raise HTTPException(status_code=500, detail="SendGrid configuration is missing.")
     
-    message = Mail(
-        from_email=From(sendgrid_from_email, "Happy Client Flow"),
+    message = build_sendgrid_mail(
+        from_email=sendgrid_from_email,
+        from_name="Happy Client Flow",
         to_emails=payload.customer_email,
-        subject=subject,
-        html_content=body
+        subject=subject or "",
+        html_content=body or "",
+        plain_text_content=plain_text_body,
     )
     
     try:

@@ -5,7 +5,6 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, EmailStr
 import databutton as db
 from sendgrid import SendGridAPIClient
-from sendgrid.helpers.mail import Mail, From
 from supabase import create_client, Client
 import requests
 from twilio.rest import Client as TwilioClient
@@ -13,6 +12,7 @@ import json
 
 from app.libs.auth import require_auth  # Updated to use require_auth
 from app.env import mode, Mode
+from app.libs.email_builder import build_sendgrid_mail
 
 router = APIRouter(prefix="/v1/review-requests", tags=["review_requests"])
 
@@ -160,6 +160,8 @@ async def send_review_request(
         if body:
             body = body.replace(key, replace_with)
 
+    plain_text_body = body or ""
+
     # Replace newlines with HTML line breaks for email rendering
     if body:
         body = body.replace('\n', '<br>')
@@ -188,14 +190,13 @@ async def send_review_request(
         if not payload.client_email:
             raise HTTPException(status_code=400, detail="Client email is required for email channel.")
 
-        message = Mail(
-            from_email=From(
-                sendgrid_from_email,
-                build_sender_display_name(payload.company_name),
-            ),
+        message = build_sendgrid_mail(
+            from_email=sendgrid_from_email,
+            from_name=build_sender_display_name(payload.company_name),
             to_emails=payload.client_email,
-            subject=subject,
-            html_content=body
+            subject=subject or "",
+            html_content=body or "",
+            plain_text_content=plain_text_body,
         )
 
         try:

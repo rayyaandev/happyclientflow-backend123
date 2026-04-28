@@ -6,9 +6,9 @@ from fastapi import APIRouter, Depends, Body
 from pydantic import BaseModel, Field
 import databutton as db
 import sendgrid
-from sendgrid.helpers.mail import Mail, From
 import os
 import supabase
+from app.libs.email_builder import build_sendgrid_mail
 
 # Supabase setup
 supabase_url = db.secrets.get("SUPABASE_URL")
@@ -88,11 +88,32 @@ def _send_consent_email(email_to: str, client_name: str, company_name: str, lang
         </html>
         """
 
-    message = Mail(
-        from_email=From(sendgrid_from_email, "Happy Client Flow"),
+    if language == "de":
+        plain_text_content = (
+            f"Hallo,\n\n"
+            f"ein neuer Kunde, {client_name}, hat soeben seine Einwilligung gegeben, "
+            f"von Ihrem Unternehmen {company_name} zum Zwecke des Feedbacks kontaktiert zu werden.\n"
+            f"Er wurde zu Ihrer Kundenliste in Happy Client Flow hinzugefügt.\n\n"
+            f"Mit freundlichen Grüßen\n"
+            f"Ihr Team von Happy Client Flow"
+        )
+    else:
+        plain_text_content = (
+            f"Hello,\n\n"
+            f"A new client, {client_name}, has just given their consent to be contacted "
+            f"for feedback by your company, {company_name}.\n"
+            f"They have been added to your client list in Happy Client Flow.\n\n"
+            f"Best regards,\n"
+            f"Your Happy Client Flow Team"
+        )
+
+    message = build_sendgrid_mail(
+        from_email=sendgrid_from_email,
+        from_name="Happy Client Flow",
         to_emails=email_to,
         subject=subject,
-        html_content=html_content
+        html_content=html_content,
+        plain_text_content=plain_text_content,
     )
     
     try:

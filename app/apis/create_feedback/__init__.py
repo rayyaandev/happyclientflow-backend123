@@ -31,6 +31,7 @@ from app.libs.google_review_reminder_scheduling import (
     schedule_google_review_followup_reminders_after_feedback,
     cancel_pending_google_review_followup_reminders,
 )
+from app.libs.email_builder import build_sendgrid_mail
 
 router = APIRouter()
 
@@ -401,7 +402,6 @@ def _send_low_rating_notification(
     """
     try:
         from sendgrid import SendGridAPIClient
-        from sendgrid.helpers.mail import Mail, From
 
         api_key = db.secrets.get("SENDGRID_API_KEY")
         if not api_key:
@@ -500,11 +500,34 @@ def _send_low_rating_notification(
         """
             subject = f"[HCF] Low-rating alert ({satisfaction}/5) — {company_name}"
 
-        message = Mail(
-            from_email=From("noreply@happyclientflow.de", "Happy Client Flow"),
+        if lang == "de":
+            plain_text_content = (
+                f"Hinweis: niedrige Bewertung\n\n"
+                f"Ein Kunde hat {satisfaction} von 5 Sternen abgegeben.\n"
+                f"Unternehmen: {company_name}\n"
+                f"Kunden-ID: {client_id}\n"
+                f"Rückruf gewünscht: {callback_label}\n"
+                f"Eingegangen: {ts}\n\n"
+                f"Nachricht des Kunden:\n{(callback_note or '(keine zusätzliche Nachricht)')}"
+            )
+        else:
+            plain_text_content = (
+                f"Low-rating feedback alert\n\n"
+                f"A client submitted {satisfaction} out of 5 stars.\n"
+                f"Company: {company_name}\n"
+                f"Client ID: {client_id}\n"
+                f"Callback requested: {callback_label}\n"
+                f"Submitted: {ts}\n\n"
+                f"Client note:\n{(callback_note or '(no additional note)')}"
+            )
+
+        message = build_sendgrid_mail(
+            from_email="noreply@happyclientflow.de",
+            from_name="Happy Client Flow",
             to_emails=owner_email,
             subject=subject,
             html_content=html_body,
+            plain_text_content=plain_text_content,
         )
         sg = SendGridAPIClient(api_key)
         response = sg.send(message)
