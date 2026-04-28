@@ -73,7 +73,7 @@ async def send_referral_invite(
     # 1. Verify company has referral program enabled
     try:
         company_res = supabase.table("companies").select(
-            "referral_program_enabled, automatic_invite, commission_amount, commission_currency"
+            "referral_program_enabled, automatic_invite, commission_amount, commission_currency, logo_url"
         ).eq("id", payload.company_id).single().execute()
         
         if not company_res.data:
@@ -147,6 +147,7 @@ The {payload.company_name} Team"""
         "{{first_name}}": payload.client_name.split()[0] if payload.client_name else "",
         "{{client_name}}": payload.client_name,
         "{{company_name}}": payload.company_name,
+        "{{company_logo_url}}": company_data.get("logo_url", ""),
         "{{referral_link}}": referral_link,
         "{{commission_amount}}": str(company_data.get('commission_amount', '')),
         "{{commission_currency}}": company_data.get('commission_currency', 'EUR'),
@@ -228,6 +229,20 @@ async def send_referral_code_email(payload: SendReferralCodePayload):
     print(f"[REFERRAL] Sending referral code to: {payload.customer_email}")
     
     supabase = get_supabase_client()
+    company_logo_url = ""
+
+    try:
+        company_logo_res = (
+            supabase.table("companies")
+            .select("logo_url")
+            .eq("id", payload.company_id)
+            .single()
+            .execute()
+        )
+        if company_logo_res.data and company_logo_res.data.get("logo_url"):
+            company_logo_url = company_logo_res.data["logo_url"]
+    except Exception as e:
+        print(f"Error fetching company logo for referral code email: {e}")
     
     # Fetch the referral code template (you'll need to create this template)
     try:
@@ -286,6 +301,7 @@ async def send_referral_code_email(payload: SendReferralCodePayload):
     variables = {
         "{{customer_name}}": payload.customer_name,
         "{{company_name}}": payload.company_name,
+        "{{company_logo_url}}": company_logo_url,
         "{{referral_code}}": payload.referral_code,
         "{{referral_link}}": payload.referral_link,
     }
