@@ -114,15 +114,27 @@ async def send_review_request(
     
     # 1. Fetch user language from their profile
     user_language = 'de' # Default to German
+    company_id = None
+    company_logo_url = ""
     try:
-        user_res = supabase.table("users").select("language").eq("id", current_user).single().execute()
+        user_res = supabase.table("users").select("language, company_id").eq("id", current_user).single().execute()
         if user_res.data and user_res.data.get("language"):
             user_language = user_res.data["language"]
             print("setting user language as", user_res.data["language"])
+        if user_res.data and user_res.data.get("company_id"):
+            company_id = user_res.data["company_id"]
         else:
             print(f"Warning: Could not find language for user {current_user}, defaulting to 'de'.")
     except Exception as e:
         print(f"Error fetching user language, defaulting to 'de': {e}")
+
+    if company_id:
+        try:
+            company_res = supabase.table("companies").select("logo_url").eq("id", company_id).single().execute()
+            if company_res.data and company_res.data.get("logo_url"):
+                company_logo_url = company_res.data["logo_url"]
+        except Exception as e:
+            print(f"Error fetching company logo for user {current_user}: {e}")
 
     
     # 2. Translate title based on user's language
@@ -148,6 +160,7 @@ async def send_review_request(
         "{{first_name}}": payload.first_name,
         "{{last_name}}": payload.last_name,
         "{{company_name}}": payload.company_name,
+        "{{company_logo_url}}": company_logo_url,
         "{{product_name}}": payload.product_name,
         "{{review_link}}": payload.review_link,
     }

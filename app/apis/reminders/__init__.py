@@ -162,6 +162,7 @@ async def process_reminders():
                 raise Exception(f"Preferred contact channel not found for client_id {reminder['client_id']}")
             
             company_id = client_res.data.get("company_id")
+            company_logo_url = ""
 
             # Fetch user language from the user associated with the client
             user_language = 'de' # Default to German
@@ -173,6 +174,18 @@ async def process_reminders():
                         user_language = user_res.data["language"]
                 except Exception as e:
                     print(f"Could not determine user language for reminder {reminder['id']}, defaulting to 'de': {e}")
+                try:
+                    company_res = (
+                        supabase.table("companies")
+                        .select("logo_url")
+                        .eq("id", company_id)
+                        .single()
+                        .execute()
+                    )
+                    if company_res.data and company_res.data.get("logo_url"):
+                        company_logo_url = company_res.data["logo_url"]
+                except Exception as e:
+                    print(f"Could not fetch company logo for reminder {reminder['id']}: {e}")
 
             # Translate title based on user's language
             original_title = reminder.get("title", "")
@@ -189,6 +202,7 @@ async def process_reminders():
                 "{{first_name}}": reminder.get("first_name", ""),
                 "{{last_name}}": reminder.get("last_name", ""),
                 "{{company_name}}": reminder.get("company_name", ""),
+                "{{company_logo_url}}": company_logo_url,
                 "{{product_name}}": reminder.get("product_name", ""),
                 "{{review_link}}": reminder.get("review_link", ""),
                 "{{google_review_link}}": reminder.get("google_review_link", ""),
