@@ -15,6 +15,7 @@ are not left with four stacked reminders.
 """
 
 import threading
+import time
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -187,19 +188,28 @@ def create_feedback(
                     f"create_feedback: WARNING could not set FeedbackSubmitted for client_id={cid!r}: {upd_err}"
                 )
 
-            try:
-                n_survey = cancel_pending_survey_reminders_for_client(
-                    supabase, cid
-                )
-                if n_survey:
-                    print(
-                        f"create_feedback: cancelled {n_survey} pending survey reminder(s) "
-                        f"for client_id={cid!r} after feedback submitted"
+            n_survey = 0
+            cancel_last_err: Optional[BaseException] = None
+            for attempt in range(3):
+                try:
+                    n_survey = cancel_pending_survey_reminders_for_client(
+                        supabase, cid
                     )
-            except Exception as cancel_err:
+                    cancel_last_err = None
+                    break
+                except Exception as cancel_err:
+                    cancel_last_err = cancel_err
+                    if attempt < 2:
+                        time.sleep(0.12 * (attempt + 1))
+            if cancel_last_err is not None:
                 print(
-                    f"create_feedback: WARNING could not cancel survey reminders "
-                    f"for client_id={cid!r}: {cancel_err}"
+                    f"create_feedback: ERROR after retries could not cancel survey reminders "
+                    f"for client_id={cid!r}: {cancel_last_err}"
+                )
+            elif n_survey:
+                print(
+                    f"create_feedback: cancelled {n_survey} pending survey reminder(s) "
+                    f"for client_id={cid!r} after feedback submitted"
                 )
 
             try:
