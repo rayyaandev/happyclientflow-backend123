@@ -10,13 +10,14 @@ from sendgrid import SendGridAPIClient
 from supabase import create_client, Client
 from app.env import mode, Mode
 import datetime
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 from twilio.rest import Client as TwilioClient
 import json
 
 from app.libs.reminder_scheduling import (
     GOOGLE_REVIEW_FOLLOWUP_KIND,
     feedback_high_satisfaction_min,
+    get_google_review_followup_template_ids_sorted,
     is_scheduled_followup_template,
     prefetch_latest_feedback_satisfaction,
 )
@@ -86,6 +87,7 @@ async def process_reminders():
         supabase, client_ids
     )
     min_stars = feedback_high_satisfaction_min()
+    google_followup_order_cache: Dict[Tuple[str, str], List[str]] = {}
 
     sent_count = 0
     failed_ids = []
@@ -289,12 +291,48 @@ async def process_reminders():
                     content_sid = "HX3dfb020601addbcbed02fe683439cd9c" # whatsapp_reminder2_formal_v2
                 elif "2. Erinnerung" in template_name and rule_type == "informal":
                     content_sid = "HX695b1182dfcb84dea5ece052e7e35614" # whatsapp_reminder2_informal_v2
-                elif tmpl_kind == GOOGLE_REVIEW_FOLLOWUP_KIND and rule_type == "formal":
-                    # Reuse survey reminder Twilio shells until dedicated GBP nudge templates exist.
-                    if "2." in template_name or "2nd" in template_name.lower():
-                        content_sid = "HX3dfb020601addbcbed02fe683439cd9c"
+                elif tmpl_kind == GOOGLE_REVIEW_FOLLOWUP_KIND and rule_type in (
+                    "formal",
+                    "informal",
+                ):
+                    # Same ordering as schedule_google_review_followup_reminders_after_feedback
+                    # (templates sorted by name). Avoids mis-picking Twilio shells when names
+                    # do not contain "2." / "2nd".
+                    co_id = str(company_id or "").strip()
+                    rt_key = str(rule_type or "").strip()
+                    gfk = (co_id, rt_key)
+                    if gfk not in google_followup_order_cache:
+                        google_followup_order_cache[gfk] = (
+                            get_google_review_followup_template_ids_sorted(
+                                supabase, co_id, rt_key
+                            )
+                        )
+                    sorted_gf_ids = google_followup_order_cache[gfk]
+                    tid_cur = str(reminder.get("template_id") or "")
+                    try:
+                        slot = sorted_gf_ids.index(tid_cur)
+                    except ValueError:
+                        slot = (
+                            1
+                            if (
+                                "2." in template_name
+                                or "2nd" in template_name.lower()
+                            )
+                            else 0
+                        )
+                    use_second_shell = slot >= 1
+                    if rule_type == "formal":
+                        content_sid = (
+                            "HX3dfb020601addbcbed02fe683439cd9c"
+                            if use_second_shell
+                            else "HX363218948b597c323bc628e54be1f9af"
+                        )
                     else:
-                        content_sid = "HX363218948b597c323bc628e54be1f9af"
+                        content_sid = (
+                            "HX695b1182dfcb84dea5ece052e7e35614"
+                            if use_second_shell
+                            else "HXd8ffd916c5eddf9506e4f70a86d06fbe"
+                        )
 
                 if not content_sid:
                     raise Exception(f"Could not determine Content SID for template '{template_name}' with rule_type '{rule_type}'.")

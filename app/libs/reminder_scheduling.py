@@ -193,20 +193,51 @@ def cancel_pending_survey_reminders_for_client(supabase: Client, client_id: str)
         .execute()
     )
     rows = getattr(pending, "data", None) or []
+    if not rows:
+        return 0
+
+    template_ids: List[str] = []
+    for row in rows:
+        tid = row.get("template_id")
+        if tid:
+            template_ids.append(str(tid))
+    unique_ids = list(dict.fromkeys(template_ids))
+
+    template_by_id: Dict[str, Dict[str, Any]] = {}
+    chunk_size = 80
+    for i in range(0, len(unique_ids), chunk_size):
+        end = i + chunk_size
+        chunk = unique_ids[i:end]
+        if not chunk:
+            continue
+        tres = (
+            supabase.from_("message_templates")
+            .select("id, template_kind, name")
+            .in_("id", chunk)
+            .execute()
+        )
+        for t in tres.data or []:
+            tid = t.get("id")
+            if tid:
+                template_by_id[str(tid)] = t
+
     cancelled = 0
     for row in rows:
         tid = row.get("template_id")
         if not tid:
             continue
-        tres = (
-            supabase.from_("message_templates")
-            .select("template_kind, name")
-            .eq("id", tid)
-            .maybe_single()
-            .execute()
-        )
-        raw = getattr(tres, "data", None)
+        tid_s = str(tid)
+        raw = template_by_id.get(tid_s)
         if not raw or not isinstance(raw, dict):
+            # Orphan / missing template: cancel so we never send an unclassified pending row.
+            print(
+                f"cancel_pending_survey_reminders: no message_template for template_id={tid_s!r} "
+                f"reminder_id={row.get('id')!r}, cancelling reminder"
+            )
+            supabase.from_("reminders").update({"sent_status": "cancelled"}).eq(
+                "id", row["id"]
+            ).execute()
+            cancelled += 1
             continue
         if is_google_review_followup_template_dict(raw):
             continue
@@ -215,6 +246,35 @@ def cancel_pending_survey_reminders_for_client(supabase: Client, client_id: str)
         ).execute()
         cancelled += 1
     return cancelled
+
+
+def get_google_review_followup_template_ids_sorted(
+    supabase: Client, company_id: str, rule_type: str
+) -> List[str]:
+    """
+    Template ids for google_review_followup in the same order as
+    schedule_google_review_followup_reminders_after_feedback (sort by name).
+    """
+    cid = (company_id or "").strip()
+    rt = (rule_type or "").strip()
+    if not cid or not rt:
+        return []
+    res = (
+        supabase.from_("message_templates")
+        .select("id, name")
+        .eq("company_id", cid)
+        .eq("template_kind", GOOGLE_REVIEW_FOLLOWUP_KIND)
+        .eq("rule_type", rt)
+        .execute()
+    )
+    trows = list(res.data or [])
+    trows.sort(key=lambda t: (t.get("name") or ""))
+    out: List[str] = []
+    for t in trows:
+        tid = t.get("id")
+        if tid:
+            out.append(str(tid))
+    return out
 
 
 def build_reminder_rows(
