@@ -9,6 +9,8 @@ Goals:
 from __future__ import annotations
 
 import os
+import time
+from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -177,14 +179,10 @@ def cancel_pending_reminders_for_client(supabase: Client, client_id: str) -> int
     return len(rows)
 
 
-def cancel_pending_survey_reminders_for_client(supabase: Client, client_id: str) -> int:
-    """
-    Cancel pending reminders whose templates are survey follow-ups (not google_review_followup).
-
-    Used when: (1) internal feedback is submitted — POST /create-feedback clears the 1./2.
-    Erinnerung chain before Google nudges may be scheduled; (2) user opens an external review
-    CTA — survey nudges stop, but Google-review nudges continue until published.
-    """
+def _pending_reminder_template_map(
+    supabase: Client, client_id: str
+) -> Tuple[List[Dict[str, Any]], Dict[str, Dict[str, Any]]]:
+    """Pending reminder rows for client_id and their message_templates keyed by id."""
     pending = (
         supabase.from_("reminders")
         .select("id, template_id")
@@ -192,10 +190,7 @@ def cancel_pending_survey_reminders_for_client(supabase: Client, client_id: str)
         .eq("sent_status", "pending")
         .execute()
     )
-    rows = getattr(pending, "data", None) or []
-    if not rows:
-        return 0
-
+    rows = list(getattr(pending, "data", None) or [])
     template_ids: List[str] = []
     for row in rows:
         tid = row.get("template_id")
@@ -220,7 +215,18 @@ def cancel_pending_survey_reminders_for_client(supabase: Client, client_id: str)
             tid = t.get("id")
             if tid:
                 template_by_id[str(tid)] = t
+    return rows, template_by_id
 
+
+def cancel_pending_survey_reminders_for_client(supabase: Client, client_id: str) -> int:
+    """
+    Cancel pending reminders whose templates are survey follow-ups (not google_review_followup).
+
+    Used when: (1) internal feedback is submitted — POST /create-feedback clears the 1./2.
+    Erinnerung chain before Google nudges may be scheduled; (2) user opens an external review
+    CTA — survey nudges stop, but Google-review nudges continue until published.
+    """
+    rows, template_by_id = _pending_reminder_template_map(supabase, client_id)
     cancelled = 0
     for row in rows:
         tid = row.get("template_id")
@@ -229,7 +235,6 @@ def cancel_pending_survey_reminders_for_client(supabase: Client, client_id: str)
         tid_s = str(tid)
         raw = template_by_id.get(tid_s)
         if not raw or not isinstance(raw, dict):
-            # Orphan / missing template: cancel so we never send an unclassified pending row.
             print(
                 f"cancel_pending_survey_reminders: no message_template for template_id={tid_s!r} "
                 f"reminder_id={row.get('id')!r}, cancelling reminder"
@@ -246,6 +251,94 @@ def cancel_pending_survey_reminders_for_client(supabase: Client, client_id: str)
         ).execute()
         cancelled += 1
     return cancelled
+
+
+@dataclass(frozen=True)
+class SurveyCancelResult:
+    """Outcome of cancelling pending survey (feedback-request) reminders."""
+
+    ok: bool
+    cancelled: int
+    pending_survey_after: int
+    last_error: Optional[str] = None
+
+
+def count_pending_survey_reminders_for_client(
+    supabase: Client, client_id: str
+) -> int:
+    """
+    Count pending reminders that are not google_review_followup (survey / feedback-request).
+    Orphan rows (missing template) count as survey-risk.
+    """
+    rows, template_by_id = _pending_reminder_template_map(supabase, client_id)
+    count = 0
+    for row in rows:
+        tid = row.get("template_id")
+        if not tid:
+            count += 1
+            continue
+        raw = template_by_id.get(str(tid))
+        if not raw or not isinstance(raw, dict):
+            count += 1
+            continue
+        if is_google_review_followup_template_dict(raw):
+            continue
+        count += 1
+    return count
+
+
+def cancel_pending_survey_reminders_with_retries(
+    supabase: Client,
+    client_id: str,
+    *,
+    max_attempts: int = 3,
+    backoff_seconds: float = 0.12,
+) -> SurveyCancelResult:
+    """
+    Cancel survey reminders with retries, then verify none remain pending.
+    """
+    cancelled = 0
+    last_error: Optional[str] = None
+
+    for attempt in range(max_attempts):
+        try:
+            cancelled = cancel_pending_survey_reminders_for_client(
+                supabase, client_id
+            )
+            last_error = None
+            break
+        except Exception as exc:
+            last_error = str(exc)
+            if attempt < max_attempts - 1:
+                time.sleep(backoff_seconds * (attempt + 1))
+
+    pending_after = count_pending_survey_reminders_for_client(supabase, client_id)
+    if pending_after > 0 and last_error is None:
+        try:
+            cancelled += cancel_pending_survey_reminders_for_client(
+                supabase, client_id
+            )
+            pending_after = count_pending_survey_reminders_for_client(
+                supabase, client_id
+            )
+        except Exception as exc:
+            last_error = str(exc)
+
+    ok = last_error is None and pending_after == 0
+    if not ok:
+        print(
+            "REMINDER_CANCEL_FAILED "
+            f"client_id={client_id!r} cancelled={cancelled} "
+            f"pending_survey_after={pending_after} "
+            f"error={last_error!r}"
+        )
+
+    return SurveyCancelResult(
+        ok=ok,
+        cancelled=cancelled,
+        pending_survey_after=pending_after,
+        last_error=last_error,
+    )
 
 
 def get_google_review_followup_template_ids_sorted(
