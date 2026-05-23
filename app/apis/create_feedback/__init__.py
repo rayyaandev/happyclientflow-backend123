@@ -15,7 +15,6 @@ are not left with four stacked reminders.
 """
 
 import threading
-import time
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -27,6 +26,7 @@ import datetime
 from app.libs.reminder_scheduling import (
     cancel_pending_reminders_for_client,
     cancel_pending_survey_reminders_for_client,
+    cancel_pending_survey_reminders_with_retries,
 )
 from app.libs.google_review_reminder_scheduling import (
     schedule_google_review_followup_reminders_after_feedback,
@@ -188,41 +188,36 @@ def create_feedback(
                     f"create_feedback: WARNING could not set FeedbackSubmitted for client_id={cid!r}: {upd_err}"
                 )
 
-            n_survey = 0
-            cancel_last_err: Optional[BaseException] = None
-            for attempt in range(3):
-                try:
-                    n_survey = cancel_pending_survey_reminders_for_client(
-                        supabase, cid
+            cancel_result = cancel_pending_survey_reminders_with_retries(
+                supabase, cid
+            )
+            if cancel_result.ok:
+                if cancel_result.cancelled:
+                    print(
+                        f"create_feedback: cancelled {cancel_result.cancelled} "
+                        f"pending survey reminder(s) for client_id={cid!r}"
                     )
-                    cancel_last_err = None
-                    break
-                except Exception as cancel_err:
-                    cancel_last_err = cancel_err
-                    if attempt < 2:
-                        time.sleep(0.12 * (attempt + 1))
-            if cancel_last_err is not None:
+            else:
                 print(
-                    f"create_feedback: ERROR after retries could not cancel survey reminders "
-                    f"for client_id={cid!r}: {cancel_last_err}"
-                )
-            elif n_survey:
-                print(
-                    f"create_feedback: cancelled {n_survey} pending survey reminder(s) "
-                    f"for client_id={cid!r} after feedback submitted"
+                    f"create_feedback: REMINDER_CANCEL_FAILED client_id={cid!r} "
+                    f"cancelled={cancel_result.cancelled} "
+                    f"pending_survey_after={cancel_result.pending_survey_after} "
+                    f"error={cancel_result.last_error!r}; "
+                    "skipping Google follow-up schedule to avoid stacked reminders"
                 )
 
-            try:
-                schedule_google_review_followup_reminders_after_feedback(
-                    supabase,
-                    client_id=cid,
-                    satisfaction=request.satisfaction,
-                )
-            except Exception as sched_err:
-                print(
-                    f"create_feedback: WARNING could not schedule Google review reminders "
-                    f"for client_id={cid!r}: {sched_err}"
-                )
+            if cancel_result.ok:
+                try:
+                    schedule_google_review_followup_reminders_after_feedback(
+                        supabase,
+                        client_id=cid,
+                        satisfaction=request.satisfaction,
+                    )
+                except Exception as sched_err:
+                    print(
+                        f"create_feedback: WARNING could not schedule Google review reminders "
+                        f"for client_id={cid!r}: {sched_err}"
+                    )
 
         return response.data[0]
 

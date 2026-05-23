@@ -14,6 +14,7 @@ from supabase import Client
 from app.libs.reminder_scheduling import (
     GOOGLE_REVIEW_FOLLOWUP_KIND,
     feedback_high_satisfaction_min,
+    count_pending_survey_reminders_for_client,
 )
 
 # Match SendReviewRequestDialog / public feedback links
@@ -144,6 +145,16 @@ def schedule_google_review_followup_reminders_after_feedback(
             return
 
         if has_pending_google_review_followup_reminders(supabase, client_id):
+            return
+
+        pending_survey = count_pending_survey_reminders_for_client(
+            supabase, client_id
+        )
+        if pending_survey > 0:
+            print(
+                f"schedule_google_review_followup: refusing to schedule for client "
+                f"{client_id!r}; {pending_survey} pending survey reminder(s) remain"
+            )
             return
 
         tres = (

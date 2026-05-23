@@ -21,6 +21,7 @@ from app.libs.reminder_scheduling import (
     is_scheduled_followup_template,
     prefetch_latest_feedback_satisfaction,
 )
+from app.libs.twilio_whatsapp import google_review_followup_whatsapp_content_sid
 from app.libs.email_builder import build_sendgrid_mail
 
 router = APIRouter(prefix="/v1/reminders", tags=["reminders"])
@@ -156,6 +157,17 @@ async def process_reminders():
                 supabase.table("reminders").update({"sent_status": "cancelled"}).eq(
                     "id", reminder["id"]
                 ).execute()
+                continue
+
+            # Defense in depth: feedback already submitted — never send survey reminders.
+            if not is_google_review_followup and raw_sat is not None:
+                supabase.table("reminders").update({"sent_status": "cancelled"}).eq(
+                    "id", reminder["id"]
+                ).execute()
+                print(
+                    f"Cancelled reminder {reminder['id']}: client has feedback "
+                    f"(satisfaction={raw_sat}), survey reminder skipped"
+                )
                 continue
 
             channel = client_res.data.get("preferred_contact_channel")
@@ -320,19 +332,10 @@ async def process_reminders():
                             )
                             else 0
                         )
-                    use_second_shell = slot >= 1
-                    if rule_type == "formal":
-                        content_sid = (
-                            "HX3dfb020601addbcbed02fe683439cd9c"
-                            if use_second_shell
-                            else "HX363218948b597c323bc628e54be1f9af"
-                        )
-                    else:
-                        content_sid = (
-                            "HX695b1182dfcb84dea5ece052e7e35614"
-                            if use_second_shell
-                            else "HXd8ffd916c5eddf9506e4f70a86d06fbe"
-                        )
+                    content_sid = google_review_followup_whatsapp_content_sid(
+                        rule_type or "formal",
+                        slot_index=slot,
+                    )
 
                 if not content_sid:
                     raise Exception(f"Could not determine Content SID for template '{template_name}' with rule_type '{rule_type}'.")
